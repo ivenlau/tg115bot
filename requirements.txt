@@ -2,6 +2,7 @@
 # 用 pyrofork（pyrogram 维护分支，修复 Python 3.12 的 inspect.getargspec 问题），
 # 仍 `from pyrogram import ...`，API 与 pyrogram 2.x 一致，代码无需改动。
 pyrofork>=2.3.68
+python-socks[asyncio]>=2.4   # TG 走 socks5 代理时需要
 TgCrypto-pyrofork        # pyrofork 专属加速；缺它也能跑（纯 Python 回退），仅更慢
 
 # ── 115 网盘（手写开放平台 + OSS 直传，零 p115client/p115oss 依赖）──────────

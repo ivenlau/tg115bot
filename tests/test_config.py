@@ -72,3 +72,34 @@ if __name__ == "__main__":
         fn()
         print(f"  ok: {fn.__name__}")
     print("test_config: ALL PASS")
+
+
+def test_parse_proxy():
+    """telegram.proxy 解析：http/socks5/认证/归一化/非法输入。"""
+    import types as _types
+    import sys as _sys
+    if "pyrogram" not in _sys.modules:          # 沙箱未装 pyrogram：stub
+        for name in ("pyrogram", "pyrogram.types"):
+            _sys.modules[name] = _types.ModuleType(name)
+        _sys.modules["pyrogram"].Client = object  # type: ignore[attr-defined]
+        _sys.modules["pyrogram"].filters = _types.SimpleNamespace()
+        _sys.modules["pyrogram.types"].Message = object  # type: ignore[attr-defined]
+    from bot.client import parse_proxy
+
+    assert parse_proxy("") is None
+    assert parse_proxy(None) is None
+    assert parse_proxy("http://127.0.0.1:7890") == \
+        {"scheme": "http", "hostname": "127.0.0.1", "port": "7890"}
+    assert parse_proxy("socks5://127.0.0.1:7891") == \
+        {"scheme": "socks5", "hostname": "127.0.0.1", "port": "7891"}
+    p = parse_proxy("socks5://user:pass@1.2.3.4:1080")
+    assert p == {"scheme": "socks5", "hostname": "1.2.3.4", "port": "1080",
+                 "username": "user", "password": "pass"}
+    assert parse_proxy("socks5h://127.0.0.1:1080")["scheme"] == "socks5"
+    assert parse_proxy("127.0.0.1:7890")["scheme"] == "http"
+    for bad in ("ftp://x:1", "socks5://nohost"):
+        try:
+            parse_proxy(bad)
+            raise AssertionError(f"应抛 ValueError: {bad}")
+        except ValueError:
+            pass

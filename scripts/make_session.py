@@ -13,6 +13,8 @@ import asyncio
 
 from pyrogram import Client
 
+from bot.client import parse_proxy
+
 from config import load_config
 
 
@@ -23,6 +25,7 @@ async def main() -> None:
         api_id=cfg.telegram.api_id,
         api_hash=cfg.telegram.api_hash,
         workdir=str(cfg.session_dir),
+        proxy=parse_proxy(cfg.telegram.proxy),
     )
     await app.start()
     try:

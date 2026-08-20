@@ -25,6 +25,9 @@ class TelegramCfg(BaseModel):
     bot_token: str
     user_session: str = ""          # 文件路径或 session 字符串；空=只用 bot
     allowed_users: List[int] = Field(default_factory=list)
+    # 代理（国内服务器访问 TG 必需；115/OSS 不走代理，国内直连更快）
+    # 形如 "socks5://127.0.0.1:7891" 或 "http://127.0.0.1:7890"；空=直连
+    proxy: str = ""
 
 
 class UploadCfg(BaseModel):

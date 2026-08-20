@@ -9,6 +9,9 @@ telegram:
   # 生成方式：python scripts/make_session.py
   user_session: ""                # 形如 config/user.session 或 session 字符串
   allowed_users: []               # TG user_id 白名单；空 [] = 不限制
+  # 国内服务器访问 TG 必需（115/OSS 不走代理，国内直连更快）
+  # 形如 "socks5://127.0.0.1:7891" 或 "http://127.0.0.1:7890"；留空 = 直连
+  proxy: "http://127.0.0.1:7890"
 
 upload:
   workers: 8                      # TG 并行下载分片数（>1 启用并行分片下载）
