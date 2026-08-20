@@ -78,3 +78,23 @@ if __name__ == "__main__":
         fn()
         print(f"  ok: {fn.__name__}")
     print("test_organize: ALL PASS")
+
+
+def test_split_ranges_units():
+    """并行下载分片：1 MiB 片语义（offset/limit 为片数，字节偏移对齐）。"""
+    import sys as _sys
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in _sys.path:
+        _sys.path.insert(0, str(_root))
+    from core.downloader import STREAM_UNIT, _split_ranges
+
+    r = _split_ranges(12 * STREAM_UNIT, 8)
+    assert len(r) == 8 and sum(c for _, c, _, _ in r) == 12
+    assert r[0] == (0, 1, 0, STREAM_UNIT)
+    assert r[7][1] == 5 and r[7][2] == 7 * STREAM_UNIT
+
+    r2 = _split_ranges(12 * STREAM_UNIT + 100, 2)
+    assert sum(l for _, _, _, l in r2) == 12 * STREAM_UNIT + 100
+    assert r2[1][3] == 6 * STREAM_UNIT + 100   # 末段吃余量
+
+    assert _split_ranges(1000, 8) == [(0, 1, 0, 1000)]   # 小文件单段

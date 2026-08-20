@@ -97,7 +97,6 @@ async def run_task(task: Task) -> None:
             tmp,
             size=task.size,
             workers=cfg.upload.workers,
-            chunk_size=cfg.upload.chunk_size,
             on_progress=reporter.on_progress,
             cancel_event=task.cancel_event,
         )

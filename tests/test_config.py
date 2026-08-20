@@ -89,11 +89,11 @@ def test_parse_proxy():
     assert parse_proxy("") is None
     assert parse_proxy(None) is None
     assert parse_proxy("http://127.0.0.1:7890") == \
-        {"scheme": "http", "hostname": "127.0.0.1", "port": "7890"}
+        {"scheme": "http", "hostname": "127.0.0.1", "port": 7890}
     assert parse_proxy("socks5://127.0.0.1:7891") == \
-        {"scheme": "socks5", "hostname": "127.0.0.1", "port": "7891"}
+        {"scheme": "socks5", "hostname": "127.0.0.1", "port": 7891}
     p = parse_proxy("socks5://user:pass@1.2.3.4:1080")
-    assert p == {"scheme": "socks5", "hostname": "1.2.3.4", "port": "1080",
+    assert p == {"scheme": "socks5", "hostname": "1.2.3.4", "port": 1080,
                  "username": "user", "password": "pass"}
     assert parse_proxy("socks5h://127.0.0.1:1080")["scheme"] == "socks5"
     assert parse_proxy("127.0.0.1:7890")["scheme"] == "http"

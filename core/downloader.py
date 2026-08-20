@@ -1,17 +1,22 @@
 """TG 下载：Pyrogram ``stream_media`` —— 单路(内联 SHA1) 或 多路并行分片(seek 写盘)。
 
+stream_media 分片语义（对照本机 pyrofork 2.3.x 源码 stream_media.py / client.get_file）：
+  - 签名 ``stream_media(message, limit=0, offset=0)``，**无 chunk_size 参数**；
+    每片固定 1 MiB。原版 pyrogram 2.x 有 chunk_size（字节），经 ``_stream_kwargs``
+    兼容垫片自适应。
+  - ``offset``/``limit`` 单位是**片的个数**（1 MiB 一片），不是字节。
+
 性能策略：
   - workers <= 1：顺序流式，边下边算 SHA1（零额外读盘）。
-  - workers  > 1：把文件按 offset 切成 N 段，N 路 ``stream_media(offset, limit)`` 并发，
-                  各自 seek 写到预分配文件的正确 offset；下完后做**一次顺序读**算整文件 SHA1
-                  （SHA1 不可由乱序分片合并，故并行时无法边下边算；刚写的文件多在页缓存，代价低）。
-
-参数 `offset` 单位为字节，`limit` 为分片**个数**（Pyrogram 语义）。
+  - workers  > 1：把文件按 1 MiB 片切成 N 段，N 路 ``stream_media(offset, limit)``
+                  并发，各自 seek 写到预分配文件的正确字节位置；下完后做一次
+                  顺序读算整文件 SHA1（乱序分片无法合并 SHA1；刚写的文件多在页缓存）。
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import math
 from pathlib import Path
@@ -23,15 +28,22 @@ from core.queue import TaskCancelled
 
 log = logging.getLogger(__name__)
 
-# Pyrogram stream_media 的 chunk_size 上限约 512KB，须为 4096 倍数
-MAX_CHUNK = 524288
+# stream_media 的固定分片单元（pyrofork 硬约定 1 MiB）
+STREAM_UNIT = 1024 * 1024
 
 ProgressCb = Callable[[int, int], Awaitable[None]]
 
 
-def _clamp_chunk(n: int) -> int:
-    n = max(4096, min(n or MAX_CHUNK, MAX_CHUNK))
-    return n - (n % 4096)
+def _stream_kwargs(pyro_client) -> dict:
+    """兼容垫片：原版 pyrogram 的 stream_media 接受 chunk_size（字节），pyrofork 不接受。
+    传 1 MiB 使两个实现的 offset/limit 单位一致（均为 1 MiB 片数）。"""
+    try:
+        params = inspect.signature(pyro_client.stream_media).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "chunk_size" in params:
+        return {"chunk_size": STREAM_UNIT}
+    return {}
 
 
 def media_info(message) -> Tuple[str, int]:
@@ -72,7 +84,7 @@ async def download(
     *,
     size: int = 0,
     workers: int = 1,
-    chunk_size: int = MAX_CHUNK,
+    chunk_size: int = STREAM_UNIT,   # 兼容旧签名；实际分片单元由库决定（1 MiB）
     on_progress: Optional[ProgressCb] = None,
     cancel_event: Optional[asyncio.Event] = None,
 ) -> Tuple[int, str]:
@@ -80,21 +92,21 @@ async def download(
 
     workers>1 且 size>0 时启用并行分片；否则走顺序内联 SHA1 路径。
     """
-    chunk_size = _clamp_chunk(chunk_size)
     if workers > 1 and size > 0:
         return await _download_parallel(
-            pyro_client, message, dest, size, workers, chunk_size, on_progress, cancel_event
+            pyro_client, message, dest, size, workers, on_progress, cancel_event
         )
     return await _download_sequential(
-        pyro_client, message, dest, size, chunk_size, on_progress, cancel_event
+        pyro_client, message, dest, size, on_progress, cancel_event
     )
 
 
-async def _download_sequential(pyro_client, message, dest, size, chunk_size, on_progress, cancel_event):
+async def _download_sequential(pyro_client, message, dest, size, on_progress, cancel_event):
+    extra = _stream_kwargs(pyro_client)
     sha = hashlib.sha1()
     written = 0
     async with aiofiles.open(dest, "wb") as f:
-        async for chunk in pyro_client.stream_media(message, chunk_size=chunk_size):
+        async for chunk in pyro_client.stream_media(message, **extra):
             if cancel_event is not None and cancel_event.is_set():
                 raise TaskCancelled()
             if not chunk:
@@ -107,34 +119,35 @@ async def _download_sequential(pyro_client, message, dest, size, chunk_size, on_
     return written, sha.hexdigest()
 
 
-def _split_ranges(size: int, workers: int, chunk_size: int):
-    """把 [0,size) 切成 workers 段，每段边界对齐 chunk_size（末段含余数）。返回 [(offset, length), ...]"""
-    total_chunks = max(1, (size + chunk_size - 1) // chunk_size)
-    n = max(1, min(workers, total_chunks))
-    chunks_per = total_chunks // n
+def _split_ranges(size: int, workers: int):
+    """把 [0,size) 按 STREAM_UNIT 片切成 workers 段（连续整片，末段含余量）。
+
+    返回 [(首片序号, 片数, 字节偏移, 字节长度), ...]；offset/limit 给 stream_media，
+    字节偏移/长度用于本地 seek 写盘。
+    """
+    total_units = max(1, math.ceil(size / STREAM_UNIT))
+    n = max(1, min(workers, total_units))
+    units_per = total_units // n
     ranges = []
-    start = 0
     for i in range(n):
-        if i == n - 1:
-            c = total_chunks - (chunks_per * (n - 1))   # 末段吃余数
-        else:
-            c = chunks_per
-        length = min(c * chunk_size, size - start)
-        ranges.append((start, length))
-        start += length
+        count = units_per if i < n - 1 else total_units - units_per * (n - 1)
+        first = i * units_per
+        byte_off = first * STREAM_UNIT
+        byte_len = min(count * STREAM_UNIT, size - byte_off)
+        ranges.append((first, count, byte_off, byte_len))
     return ranges
 
 
-async def _download_parallel(pyro_client, message, dest, size, workers, chunk_size, on_progress, cancel_event):
-    ranges = _split_ranges(size, workers, chunk_size)
+async def _download_parallel(pyro_client, message, dest, size, workers, on_progress, cancel_event):
+    extra = _stream_kwargs(pyro_client)
+    ranges = _split_ranges(size, workers)
     bytes_done = [0] * len(ranges)
 
-    async def _worker(idx, offset, length):
-        n_chunks = math.ceil(length / chunk_size) if length else 0
+    async def _worker(idx, first_unit, n_units, byte_off):
         async with aiofiles.open(dest, "r+b") as f:
-            await f.seek(offset)
+            await f.seek(byte_off)
             async for chunk in pyro_client.stream_media(
-                message, offset=offset, limit=n_chunks, chunk_size=chunk_size
+                message, offset=first_unit, limit=n_units, **extra
             ):
                 if cancel_event is not None and cancel_event.is_set():
                     raise TaskCancelled()
@@ -145,7 +158,7 @@ async def _download_parallel(pyro_client, message, dest, size, workers, chunk_si
                 if on_progress:
                     await on_progress(sum(bytes_done), size)
 
-    tasks = [asyncio.create_task(_worker(i, o, l)) for i, (o, l) in enumerate(ranges)]
+    tasks = [asyncio.create_task(_worker(i, *r)) for i, r in enumerate(ranges)]
     try:
         await asyncio.gather(*tasks)
     except BaseException:

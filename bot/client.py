@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 def parse_proxy(proxy: str) -> Optional[Dict[str, str]]:
     """把 "socks5://host:port" / "http://host:port" 解析为 Pyrogram 的 proxy dict。
 
-    Pyrogram 约定：{"scheme": ..., "hostname": ..., "port": ..., "username":..., "password":...}
+    Pyrogram 约定：{"scheme": ..., "hostname": ..., "port": int, "username":..., "password":...}
     scheme: socks4 / socks5 / http（socks5h 由 python-socks 处理远端解析，此处归一为 socks5）。
     """
     raw = (proxy or "").strip()
@@ -39,10 +39,10 @@ def parse_proxy(proxy: str) -> Optional[Dict[str, str]]:
         raise ValueError(f"不支持的代理 scheme: {scheme!r}（socks4/socks5/http）")
     if not parts.hostname or not parts.port:
         raise ValueError(f"代理地址缺少 host/port: {proxy!r}")
-    d: Dict[str, str] = {
+    d: Dict[str, object] = {
         "scheme": scheme,
         "hostname": parts.hostname,
-        "port": str(parts.port),
+        "port": parts.port,           # Pyrogram/PySocks 要求 int
     }
     if parts.username:
         d["username"] = parts.username
