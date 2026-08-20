@@ -143,7 +143,7 @@ async def _download_parallel(pyro_client, message, dest, size, workers, on_progr
     ranges = _split_ranges(size, workers)
     bytes_done = [0] * len(ranges)
 
-    async def _worker(idx, first_unit, n_units, byte_off):
+    async def _worker(idx, first_unit, n_units, byte_off, byte_len):
         async with aiofiles.open(dest, "r+b") as f:
             await f.seek(byte_off)
             async for chunk in pyro_client.stream_media(
@@ -157,6 +157,9 @@ async def _download_parallel(pyro_client, message, dest, size, workers, on_progr
                 bytes_done[idx] += len(chunk)
                 if on_progress:
                     await on_progress(sum(bytes_done), size)
+        if bytes_done[idx] != byte_len:
+            log.warning("分片#%d 字节数不符: 期望 %d 实得 %d（可能流提前结束）",
+                        idx, byte_len, bytes_done[idx])
 
     tasks = [asyncio.create_task(_worker(i, *r)) for i, r in enumerate(ranges)]
     try:
