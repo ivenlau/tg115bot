@@ -32,6 +32,27 @@ TG 消息 → bot/handlers → core/queue → core/pipeline
 
 ## 快速开始
 
+### 0. （国内服务器）先部署代理
+
+TG 在国内服务器上直连不通，需先有代理。项目自带一键部署脚本（mihomo/Clash 内核，
+下载二进制 + 订阅配置 + GeoIP + systemd 服务 + 连通性实测）：
+
+```bash
+sudo scripts/setup-mihomo.sh <你的订阅地址>     # 或交互式输入；也支持本地 config.yaml 路径
+```
+
+装好后在 `config.yaml` 的 `telegram` 段启用（115/OSS 不走代理，国内直连更快）：
+
+```yaml
+telegram:
+  proxy: "http://127.0.0.1:7890"    # mihomo 默认混合端口；socks5:// 同样支持
+```
+
+境外服务器可跳过本节（proxy 留空）。
+
+> Debian/Ubuntu 系统 Python 直接 `pip install` 会被 PEP 668 拦截（`externally-managed-environment`），**必须用 venv**（如上）或 Docker。
+> 115 协议为本项目手写（`cloud115/`），**不依赖 p115client/p115oss**，无需任何 GitHub 源安装——这正是抛弃该生态的原因（双 monorepo 依赖互锁，装环境极脆弱）。
+
 ### 1. 安装依赖
 
 > **需要 Python ≥3.12**（Docker 镜像已用 `python:3.12-slim`）。pyrogram 原版在 3.12 有兼容问题，故用其维护分支 **pyrofork**（API 一致，仍 `from pyrogram import ...`）。
@@ -40,9 +61,6 @@ TG 消息 → bot/handlers → core/queue → core/pipeline
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt   # 全部来自 PyPI，无 GitHub 源
 ```
-
-> Debian/Ubuntu 系统 Python 直接 `pip install` 会被 PEP 668 拦截（`externally-managed-environment`），**必须用 venv**（如上）或 Docker。
-> 115 协议为本项目手写（`cloud115/`），**不依赖 p115client/p115oss**，无需任何 GitHub 源安装——这正是抛弃该生态的原因（双 monorepo 依赖互锁，装环境极脆弱）。
 
 ### 2. 配置
 
@@ -147,6 +165,7 @@ tg115bot/
 ├── utils/                 # rate(限速/退避/FloodWait)  crypto(加密)  logging
 ├── tests/                 # 纯逻辑测试（organize/匹配/轮转/加密/配置/FloodWait/DB/115协议）
 ├── scripts/
+│   ├── setup-mihomo.sh    # 一键部署 mihomo 代理（国内服务器 TG 必需）
 │   ├── check115.py        # 115 冒烟测试（首次必跑）
 │   ├── make_session.py    # 生成 user session
 │   └── healthcheck.py     # 容器健康检查
