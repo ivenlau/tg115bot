@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}日志{% endblock %}
+{% block content %}
+<div class="row" style="margin-bottom:12px">
+  <span>级别筛选：</span>
+  <a class="btn" href="/logs">全部</a>
+  <a class="btn" href="/logs?level=WARNING">WARNING+</a>
+  <a class="btn" href="/logs?level=ERROR">ERROR+</a>
+  <span class="hint" style="margin-left:auto">最近 300 条</span>
+</div>
+<table>
+  <tr><th>时间</th><th>级别</th><th>logger</th><th>消息</th></tr>
+  {% for l in logs %}
+  <tr>
+    <td class="mono">{{ l.ts|ts }}</td>
+    <td class="{{ 'err' if l.level in ('ERROR','CRITICAL') else ('warn' if l.level=='WARNING' else 'muted') }}">{{ l.level }}</td>
+    <td class="mono muted">{{ l.logger }}</td>
+    <td class="mono">{{ l.message }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="hint">暂无日志。</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

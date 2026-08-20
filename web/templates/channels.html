@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}频道规则{% endblock %}
+{% block content %}
+<h3>新增/更新规则</h3>
+<form class="card" hx-post="/channels" hx-target="#rules-list" hx-swap="innerHTML" style="margin-bottom:18px">
+  <div class="row">
+    <label>频道ID <input name="channel_id" required placeholder="-1001234567890"></label>
+    <label>标题 <input name="title" placeholder="可选"></label>
+    <label>目标目录 <input name="target_dir" placeholder="/tg115bot/movies"></label>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <label>白名单关键词 <input name="whitelist" placeholder="逗号分隔，空=全部"></label>
+    <label>黑名单关键词 <input name="blacklist" placeholder="逗号分隔"></label>
+    <label><input type="checkbox" name="enabled" checked> 启用</label>
+    <button type="submit">保存</button>
+  </div>
+  <p class="hint">频道ID 在 TG 内转发消息给 @userinfobot 可获取；bot 需已加入该频道。</p>
+</form>
+
+<h3>规则列表</h3>
+<div id="rules-list">
+  {% include "_channels_list.html" %}
+</div>
+{% endblock %}

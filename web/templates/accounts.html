@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}账号{% endblock %}
+{% block content %}
+<h3>115 账号</h3>
+<table>
+  <tr><th>账号</th><th>模式</th><th>权重</th><th>就绪</th><th>状态</th><th>最近使用</th><th>最近错误</th></tr>
+  {% for a in accounts %}
+  <tr>
+    <td class="mono">{{ a.name }}</td>
+    <td>{{ a.mode }}</td>
+    <td>{{ a.weight }}</td>
+    <td>{{ '✅' if a.ready else '❌' }}</td>
+    <td class="{{ 'ok' if a.status=='ok' else 'err' }}">{{ a.status }}</td>
+    <td class="mono">{{ a.last_used_at|ts }}</td>
+    <td class="mono err" style="max-width:320px;overflow:hidden;text-overflow:ellipsis">{{ a.last_error or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="hint">账号凭据由 config.yaml 配置；状态/冷却由运行时维护。失效账号可用 TG 内 /auth 重新探活。</p>
+{% endblock %}

@@ -1,0 +1,20 @@
+{# 频道规则列表片段（增删后 HTMX 局部替换） #}
+<table>
+  <tr><th>ID</th><th>频道ID</th><th>标题</th><th>目标目录</th><th>白名单</th><th>黑名单</th><th>启用</th><th>操作</th></tr>
+  {% for r in rules %}
+  <tr>
+    <td class="mono">{{ r.id }}</td>
+    <td class="mono">{{ r.channel_id }}</td>
+    <td>{{ r.title or '-' }}</td>
+    <td class="mono">{{ r.target_dir or '(默认)' }}</td>
+    <td class="mono">{{ r.whitelist|join(', ') or '(全部)' }}</td>
+    <td class="mono">{{ r.blacklist|join(', ') or '-' }}</td>
+    <td>{{ '✅' if r.enabled else '⏸' }}</td>
+    <td>
+      <form class="inline" hx-post="/channels/{{ r.id }}/delete" hx-target="#rules-list" hx-swap="innerHTML">
+        <button class="danger" type="submit">删除</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>

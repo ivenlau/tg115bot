@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# 配置与凭据（绝不入库）
+config.yaml
+config/*.session
+config/*.session-journal
+config/open_token.json
+config/open_token_*.json
+config/cookies.txt
+
+# 运行产物
+_qr.png
+downloads/
+*.log
+logs/
+db/
+*.db
+
+# Claude Code 本地配置
+.claude/
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store

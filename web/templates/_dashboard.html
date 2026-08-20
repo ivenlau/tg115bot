@@ -1,0 +1,45 @@
+{# 仪表盘局部刷新片段（HTMX 每 3s 拉取） #}
+<div class="grid">
+  <div class="card"><h3>进行中任务</h3><div class="big">{{ active_tasks|length }}</div></div>
+  <div class="card"><h3>历史总数</h3><div class="big">{{ stats.total }}</div>
+    <span class="hint">✅{{ stats.done }} ❌{{ stats.failed }} 🚫{{ stats.cancelled }}</span></div>
+  <div class="card"><h3>秒传命中</h3><div class="big ok">{{ stats['秒传'] }}</div></div>
+  <div class="card"><h3>可用账号</h3>
+    <div class="big">{{ accounts|selectattr('status','equalto','ok')|list|length }}/{{ accounts|length }}</div>
+  </div>
+  <div class="card"><h3>磁盘剩余</h3><div class="big">{{ '%.1f'|format(free_gb) }} GB</div>
+    <span class="hint">下限 {{ min_free_gb }} GB</span></div>
+</div>
+
+<h3>进行中</h3>
+{% if active_tasks %}
+<table>
+  <tr><th>文件</th><th>来源</th><th>阶段</th><th>进度</th><th>耗时</th></tr>
+  {% for t in active_tasks %}
+  <tr>
+    <td class="mono">{{ t.filename }}</td>
+    <td>{{ '频道' if t.source=='channel' else '手动' }}</td>
+    <td>{{ t.stage }}</td>
+    <td>
+      <div class="mono">{{ t.current|human_bytes }} / {{ t.total|human_bytes }} ({{ '%.1f'|format(t.pct) }}%)</div>
+      <div class="bar"><div style="width:{{ t.pct|round }}%"></div></div>
+    </td>
+    <td class="mono">{{ t.elapsed }}s</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="hint">当前没有进行中的任务。</p>
+{% endif %}
+
+<h3 style="margin-top:18px">账号状态</h3>
+<table>
+  <tr><th>账号</th><th>模式</th><th>权重</th><th>状态</th><th>冷却</th></tr>
+  {% for a in accounts %}
+  <tr>
+    <td class="mono">{{ a.name }}</td><td>{{ a.mode }}</td><td>{{ a.weight }}</td>
+    <td class="{{ 'ok' if a.status=='ok' else 'err' }}">{{ a.status }}</td>
+    <td class="mono">{{ a.cooldown_sec }}s</td>
+  </tr>
+  {% endfor %}
+</table>

@@ -1,0 +1,25 @@
+# ── Telegram (MTProto, bypasses 20MB Bot API limit) ─────────────────────────
+# 用 pyrofork（pyrogram 维护分支，修复 Python 3.12 的 inspect.getargspec 问题），
+# 仍 `from pyrogram import ...`，API 与 pyrogram 2.x 一致，代码无需改动。
+pyrofork>=2.3.68
+TgCrypto-pyrofork        # pyrofork 专属加速；缺它也能跑（纯 Python 回退），仅更慢
+
+# ── 115 网盘（手写开放平台 + OSS 直传，零 p115client/p115oss 依赖）──────────
+# 协议自包含在 cloud115/openapi.py + cloud115/oss_upload.py，只依赖下面的 aiohttp。
+# 授权用 /auth 扫码（PKCE），需要 qrcode 生成二维码图片（缺失时降级发文本链接）。
+qrcode[pil]>=7.4
+
+# ── 配置 / 工具 ─────────────────────────────────────────────────────────────
+pydantic>=2.5
+pyyaml>=6.0
+aiofiles>=23.2
+aiohttp>=3.9            # OSS 分片并发上传
+
+# ── Phase 3：Web 管理台 / 持久化 ────────────────────────────────────────────
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+aiosqlite>=0.20
+
+# ── Phase 4：凭据加密 ───────────────────────────────────────────────────────
+cryptography>=42.0

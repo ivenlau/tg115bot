@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}任务历史{% endblock %}
+{% block content %}
+<h3>任务历史（最近 100 条）</h3>
+<table>
+  <tr><th>状态</th><th>文件</th><th>大小</th><th>目标目录</th><th>方式</th><th>来源</th><th>创建时间</th><th>错误</th></tr>
+  {% for t in tasks %}
+  <tr>
+    <td>{{ t.status|status_badge }} {{ t.status }}</td>
+    <td class="mono">{{ t.filename }}</td>
+    <td class="mono">{{ t.size|human_bytes }}</td>
+    <td class="mono">{{ t.target_dir }}</td>
+    <td>{{ t.method or '-' }}</td>
+    <td>{{ '频道' if t.source=='channel' else '手动' }}</td>
+    <td class="mono">{{ t.created_at|ts }}</td>
+    <td class="mono err" style="max-width:260px;overflow:hidden;text-overflow:ellipsis">{{ t.error or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,26 @@
+services:
+  tg115bot:
+    build: .
+    image: tg115bot:latest
+    container_name: tg115bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      # 主配置（只读）+ 可写 config/（session/token）
+      - ./config.yaml:/app/config.yaml:ro
+      - ./config:/app/config
+      # 运行产物
+      - ./downloads:/app/downloads
+      - ./db:/app/db
+      - ./logs:/app/logs
+    ports:
+      - "8080:8080"   # Web 管理台；config.web.enable=true 时生效
+    healthcheck:
+      test: ["CMD", "python", "scripts/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
