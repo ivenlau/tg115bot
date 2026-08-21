@@ -51,7 +51,13 @@ def media_info(message) -> Tuple[str, int]:
     photo = getattr(message, "photo", None)
     if photo:
         from datetime import datetime as _dt
-        ts = _dt.fromtimestamp(photo.date or 0).strftime("%Y%m%d_%H%M%S") if photo.date else "photo"
+        d = photo.date
+        if isinstance(d, _dt):                      # pyrogram 直接给 datetime 对象
+            ts = d.strftime("%Y%m%d_%H%M%S")
+        elif d:                                     # 兼容 int 时间戳
+            ts = _dt.fromtimestamp(d).strftime("%Y%m%d_%H%M%S")
+        else:
+            ts = "photo"
         return f"photo_{ts}.jpg", photo.file_size or 0
     for attr in ("video", "animation", "audio", "voice", "video_note", "document"):
         m = getattr(message, attr, None)
