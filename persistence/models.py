@@ -70,3 +70,28 @@ class LogRow:
     level: str = "INFO"
     logger: str = ""
     message: str = ""
+
+
+# 离线下载任务状态
+OFFLINE_PENDING = "pending"        # 已提交 115
+OFFLINE_RUNNING = "running"        # 下载中
+OFFLINE_DONE = "done"              # 完成
+OFFLINE_FAILED = "failed"          # 失败
+OFFLINE_RETRYING = "retrying"      # 失败待重试
+
+
+@dataclass
+class OfflineTaskRow:
+    id: int = 0
+    url: str = ""                   # magnet/ed2k/http
+    name: str = ""                  # 115 返回的资源名
+    save_path: str = ""            # 115 目标目录
+    status: str = OFFLINE_PENDING
+    source: str = "manual"         # manual | rss | movie
+    info_hash: str = ""
+    percent: int = 0
+    retries: int = 0
+    error: str = ""
+    chat_id: int = 0               # 完成通知发往
+    created_at: float = 0.0
+    updated_at: float = 0.0

@@ -14,6 +14,7 @@ from core.workspace import Workspace
 from core.queue import TaskQueue
 from core.pipeline import run_task
 from core.app import state
+from core.offline import offline_watcher
 from bot.client import build_bot, build_user
 from bot.handlers import register
 from bot.channel_monitor import ChannelMonitor
@@ -54,6 +55,7 @@ async def main() -> None:
         drainer_task = asyncio.create_task(
             log_drainer(db, db_log_handler), name="tg115bot-log-drainer"
         )
+    offline_task = asyncio.create_task(offline_watcher(), name="tg115bot-offline")
 
     # ── 115 多账号 ────────────────────────────────────────────────────────
     accounts = AccountManager(cfg.accounts, cfg.session_dir, cfg.rate115.min_interval_sec, db)
@@ -113,6 +115,8 @@ async def main() -> None:
         if drainer_task is not None:
             drainer_task.cancel()
             await asyncio.gather(drainer_task, return_exceptions=True)
+        offline_task.cancel()
+        await asyncio.gather(offline_task, return_exceptions=True)
         await state.queue.stop()
         if state.pyro_user is not None:
             await state.pyro_user.stop()

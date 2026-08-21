@@ -166,6 +166,30 @@ def test_poll_qr_status_semantics():
             sys.modules.pop("aiohttp", None)
 
 
+
+
+def test_classify_link():
+    """离线链接识别：magnet/ed2k/直链/误报防护。"""
+    import types as _types
+    if "aiohttp" not in sys.modules:
+        _aio = _types.ModuleType("aiohttp")
+        _aio.ClientSession = type("ClientSession", (), {"__init__": lambda s, *a, **k: None})
+        _aio.ClientTimeout = lambda **k: None
+        sys.modules["aiohttp"] = _aio
+    from core.offline import classify_link
+
+    assert classify_link("magnet:?xt=urn:btih:ABCDEF1234567890&dn=t") == "magnet"
+    assert classify_link("ed2k://|file|name.mkv|12345|hash|/") == "ed2k"
+    assert classify_link("https://example.com/movie.torrent") == "url"
+    assert classify_link("http://a.com/video.mp4") == "url"
+    assert classify_link("https://pan.baidu.com/s/xyz") == "url"
+    assert classify_link("普通聊天文本") is None
+    assert classify_link("看看这个 https://a.com/x.mp4") is None
+    assert classify_link("magnet:?xt=urn:btih:短") is None
+    assert classify_link("") is None
+    assert classify_link("a" * 3000) is None
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

@@ -14,7 +14,7 @@ from typing import Any, List, Optional
 import aiosqlite
 
 from persistence.models import (
-    AccountRow, ChannelRuleRow, LogRow, TaskRow,
+    AccountRow, ChannelRuleRow, LogRow, OfflineTaskRow, TaskRow,
     STATUS_QUEUED,
 )
 
@@ -62,6 +62,24 @@ CREATE TABLE IF NOT EXISTS accounts (
     last_error   TEXT,
     updated_at   REAL
 );
+
+CREATE TABLE IF NOT EXISTS offline_tasks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL,
+    name        TEXT,
+    save_path   TEXT,
+    status      TEXT,
+    source      TEXT,
+    info_hash   TEXT,
+    percent     INTEGER DEFAULT 0,
+    retries     INTEGER DEFAULT 0,
+    error       TEXT,
+    chat_id     INTEGER,
+    created_at  REAL,
+    updated_at  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_offline_status ON offline_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_offline_url ON offline_tasks(url);
 
 CREATE TABLE IF NOT EXISTS logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,6 +241,47 @@ class Database:
             rows = await cur.fetchall()
         return [_account_row(r) for r in rows]
 
+    # ── 离线任务 ─────────────────────────────────────────────────────────
+    async def insert_offline(self, t: OfflineTaskRow) -> int:
+        cur = await self.conn.execute(
+            """INSERT INTO offline_tasks(url,name,save_path,status,source,info_hash,
+               percent,retries,error,chat_id,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (t.url, t.name, t.save_path, t.status, t.source, t.info_hash,
+             t.percent, t.retries, t.error, t.chat_id, time.time(), time.time()),
+        )
+        await self.conn.commit()
+        return cur.lastrowid or 0
+
+    async def get_offline_by_url(self, url: str) -> Optional[OfflineTaskRow]:
+        async with self.conn.execute(
+            "SELECT * FROM offline_tasks WHERE url=? ORDER BY id DESC LIMIT 1", (url,)
+        ) as cur:
+            r = await cur.fetchone()
+        return _offline_row(r) if r else None
+
+    async def update_offline(self, offline_id: int, **kw) -> None:
+        allowed = ("name", "status", "info_hash", "percent", "retries", "error")
+        sets, params = [], []
+        for k, v in kw.items():
+            if k in allowed:
+                sets.append(f"{k}=?"); params.append(v)
+        if not sets:
+            return
+        sets.append("updated_at=?"); params.append(time.time()); params.append(offline_id)
+        await self.conn.execute(f"UPDATE offline_tasks SET {', '.join(sets)} WHERE id=?", params)
+        await self.conn.commit()
+
+    async def offline_by_status(self, *statuses: str) -> List[OfflineTaskRow]:
+        if not statuses:
+            return []
+        ph = ",".join("?" * len(statuses))
+        async with self.conn.execute(
+            f"SELECT * FROM offline_tasks WHERE status IN ({ph}) ORDER BY id", statuses
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_offline_row(r) for r in rows]
+
     # ── 日志 ─────────────────────────────────────────────────────────────
     async def insert_logs(self, entries: List[LogRow]) -> None:
         if not entries:
@@ -283,6 +342,16 @@ def _account_row(r: aiosqlite.Row) -> AccountRow:
         enabled=bool(r["enabled"]), status=r["status"] or "unknown",
         last_used_at=r["last_used_at"] or 0.0, last_error=r["last_error"] or "",
         updated_at=r["updated_at"] or 0.0,
+    )
+
+
+def _offline_row(r: aiosqlite.Row) -> OfflineTaskRow:
+    return OfflineTaskRow(
+        id=r["id"], url=r["url"], name=r["name"] or "", save_path=r["save_path"] or "",
+        status=r["status"] or "pending", source=r["source"] or "manual",
+        info_hash=r["info_hash"] or "", percent=r["percent"] or 0,
+        retries=r["retries"] or 0, error=r["error"] or "", chat_id=r["chat_id"] or 0,
+        created_at=r["created_at"] or 0.0, updated_at=r["updated_at"] or 0.0,
     )
 
 

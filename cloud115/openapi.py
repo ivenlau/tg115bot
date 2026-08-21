@@ -79,6 +79,10 @@ class Open115Client:
         self.refresh_token = ""
         self._path_cache: Dict[str, dict] = {}      # path -> file_info（脏缓存主动失效）
         self._last_code_ts = 0.0                    # 最近一次 proapi 调用时间（探活限速用）
+        # 日请求计数（风控防御，对照 telegram-115bot：普通用户 10000/日，终身会员 15000）
+        self.request_count = 0
+        self.daily_limit = 9500                     # 0.95 安全阈值
+        self._count_date = time.localtime().tm_yday
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
     async def start(self) -> None:
@@ -136,6 +140,9 @@ class Open115Client:
             if not self.access_token and self.refresh_token:
                 await self.refresh_access_token()   # 启动时只有 refresh_token 也能换
             headers["Authorization"] = f"Bearer {self.access_token}"
+        self._count_request()
+        if BASE_API in url and self.request_count > self.daily_limit:
+            raise RuntimeError(f"115 日请求已达安全阈值({self.daily_limit})，为避风控暂停 API 调用，0 点自动恢复")
         await self._rate.acquire()
         async with self.session.request(method, url, params=params, data=data, headers=headers) as r:
             text = await r.text()
@@ -159,6 +166,15 @@ class Open115Client:
     def _ok(resp: Dict[str, Any]) -> bool:
         """proapi 成功判定：code==0（passport 接口 state==True 时 code 也为 0）。"""
         return resp.get("code") == 0 or resp.get("state") is True
+
+    def _count_request(self) -> None:
+        """日请求计数（跨天自动重置）。"""
+        today = time.localtime().tm_yday
+        if today != self._count_date:
+            log.info("115 日请求计数重置（昨日 %d 次）", self.request_count)
+            self.request_count = 0
+            self._count_date = today
+        self.request_count += 1
 
     # ── token 刷新 ───────────────────────────────────────────────────────
     async def refresh_access_token(self) -> bool:
@@ -354,6 +370,69 @@ class Open115Client:
             if not data.get(k):
                 raise RuntimeError(f"STS 凭证缺字段 {k}")
         return data
+
+    # ── 离线下载（对照 telegram-115bot open_115.py 逐字段） ─────────────
+    async def offline_add(self, url: str, save_path: str) -> bool:
+        """添加离线任务到指定目录。⚠️ urls 字段是单个 URL 字符串（尽管名字是复数）。
+
+        返回 True 成功；目录不存在会自动递归创建（含建后延迟重试）。
+        """
+        wp_path_id = await self.create_dir_recursive(save_path)
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/offline/add_task_urls",
+            data={"urls": url, "wp_path_id": wp_path_id},
+        )
+        if self._ok(resp):
+            log.info("离线任务已添加: %s -> %s", url[:80], save_path)
+            return True
+        raise RuntimeError(f"添加离线任务失败: {str(resp)[:200]}")
+
+    async def offline_list(self, page: int = 1) -> Dict[str, Any]:
+        """取一页离线任务。返回 data（含 tasks/page_count）。字段（缩写）：
+        name/url/status(-1失败 1进行 2完成)/percentDone/info_hash/file_id/wp_path_id/delete_file_id"""
+        resp = await self._request(
+            "GET", f"{BASE_API}/open/offline/get_task_list", params={"page": page}
+        )
+        if not self._ok(resp):
+            return {"tasks": [], "page_count": 0, "error": str(resp)[:200]}
+        return resp.get("data") or {"tasks": [], "page_count": 0}
+
+    async def offline_list_all(self) -> list:
+        """翻页取全部离线任务（页间 sleep 2s 避风控）。"""
+        first = await self.offline_list(1)
+        tasks = list(first.get("tasks") or [])
+        for page in range(2, int(first.get("page_count", 1)) + 1):
+            await asyncio.sleep(2)
+            data = await self.offline_list(page)
+            tasks.extend(data.get("tasks") or [])
+        return tasks
+
+    async def offline_del(self, info_hash: str, del_source_file: int = 0) -> bool:
+        """删除离线任务记录。del_source_file: 1=连已下载文件一起删 0=仅清任务记录。"""
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/offline/del_task",
+            data={"info_hash": info_hash, "del_source_file": del_source_file},
+        )
+        if self._ok(resp):
+            return True
+        log.warning("删除离线任务失败: %s", str(resp)[:200])
+        return False
+
+    async def offline_quota(self) -> Dict[str, Any]:
+        """离线下载配额：{used, count}。"""
+        resp = await self._request("GET", f"{BASE_API}/open/offline/get_quota_info")
+        if not self._ok(resp):
+            return {}
+        return resp.get("data") or {}
+
+    @staticmethod
+    def offline_done(task: Dict[str, Any]) -> bool:
+        """完成判定（对照 check_offline_download_success）：status==2 或 percentDone==100。"""
+        return task.get("status") == 2 or task.get("percentDone") == 100
+
+    @staticmethod
+    def offline_failed(task: Dict[str, Any]) -> bool:
+        return task.get("status") == -1
 
     # ── 探活 ─────────────────────────────────────────────────────────────
     async def check_login(self) -> bool:

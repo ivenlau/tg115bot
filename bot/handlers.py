@@ -13,6 +13,7 @@ from config import get_config
 from core.app import state
 from core.downloader import media_info
 from core.progress import human_bytes
+from core.offline import classify_link, submit
 from core.queue import Task
 from utils.rate import with_flood_wait
 
@@ -27,7 +28,9 @@ HELP = (
     "/cancel — 取消你最近一个进行中任务\n"
     "/channels — 查看频道监控规则\n"
     "/addchannel `<频道ID>` `<目标目录>` `[关键词...]` — 新增频道规则\n"
-    "/delchannel `<规则ID>` — 删除频道规则"
+    "/delchannel `<规则ID>` — 删除频道规则\n"
+    "/offline `<链接>` — 115 离线下载（磁力/ed2k/直链，也可直接发链接）\n"
+    "/offlines — 查看离线任务队列"
 )
 
 
@@ -202,10 +205,64 @@ def register(app) -> None:
             await state.monitor.reload()
         await message.reply_text(f"✅ 已删除规则 {rule_id}")
 
+    @app.on_message(filters.command("offline"))
+    async def _offline(_, message: Message):
+        if not _authorized(message):
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await with_flood_wait(lambda: message.reply_text(
+                "用法: /offline <magnet/ed2k/链接> （也可直接发链接给我）\n"
+                "保存目录: /setdir 设置的目录或默认 /tg115bot"
+            ))
+            return
+        await _do_offline(message, parts[1].strip())
+
+    @app.on_message(filters.command("offlines"))
+    async def _offlines(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("持久化未启用")
+            return
+        from persistence.models import OFFLINE_DONE, OFFLINE_FAILED
+        rows = await state.db.offline_by_status(
+            "pending", "running", "retrying", OFFLINE_DONE, OFFLINE_FAILED)
+        if not rows:
+            await message.reply_text("暂无离线任务")
+            return
+        icon = {"pending": "⏳", "running": "⬇️", "retrying": "🔁", "done": "✅", "failed": "❌"}
+        lines = ["**离线任务**"]
+        for r in rows[-15:]:   # 最近 15 条
+            pct = f" {r.percent}%" if r.status == "running" else ""
+            name = r.name or r.url[:50]
+            lines.append(f"{icon.get(r.status, '•')} {name}{pct} → {r.save_path}")
+        await message.reply_text("\n".join(lines))
+
+    async def _do_offline(message: Message, url: str):
+        cfg = get_config()
+        target = state.user_target_dirs.get(message.from_user.id) or cfg.upload.target_dir
+        ok, msg = await submit(url, target, source="manual", chat_id=message.chat.id)
+        await with_flood_wait(lambda: message.reply_text(
+            f"🚀 {msg}\n📁 {target}" if ok else f"⚠️ {msg}"
+        ))
+
     media_filter = (
         filters.video | filters.animation | filters.audio | filters.voice
         | filters.video_note | filters.document
     )
+
+    @app.on_message(filters.text & ~filters.command(
+        ["start", "help", "setdir", "auth", "cancel", "channels",
+         "addchannel", "delchannel", "offline", "offlines"]))
+    async def on_link(_, message: Message):
+        """纯文本链接（magnet/ed2k/直链）自动识别为离线下载。"""
+        if not _authorized(message):
+            return
+        kind = classify_link(message.text or "")
+        if kind is None:
+            return   # 普通文本，忽略
+        await _do_offline(message, (message.text or "").strip())
 
     @app.on_message(media_filter)
     async def on_media(_, message: Message):
