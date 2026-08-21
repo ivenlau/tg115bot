@@ -269,7 +269,14 @@ def register(app) -> None:
     _album_buf: dict = {}          # group_id -> {"msgs": [...], "timer": Task}
     ALBUM_WINDOW = 2.0             # 聚合窗口（秒）：同组消息到达间隔上限
 
-    async def _flush_album(group_id: str):
+    async def _flush_album(group_id):
+        """聚合窗口到期：按序入队。游离 task，自身必须吞掉异常。"""
+        try:
+            await _flush_album_inner(group_id)
+        except Exception:  # noqa: BLE001 -- call_later 派生 task 无人 await，异常必须自捕
+            log.exception("相册聚合入队失败: %r", group_id)
+
+    async def _flush_album_inner(group_id):
         buf = _album_buf.pop(group_id, None)
         if not buf:
             return
@@ -279,8 +286,9 @@ def register(app) -> None:
         await with_flood_wait(lambda: first.reply_text(
             f"📸 相册已加入队列（{len(msgs)} 项 / {human_bytes(total)}），将按顺序上传"
         ))
+        gid_tail = str(group_id)[-6:]
         for m in msgs:
-            await _enqueue_media(m, album_note=f"相册 {group_id[-6:]}")
+            await _enqueue_media(m, album_note=f"相册 {gid_tail}")
         log.info("相册入队: %s (%d 项)", group_id, len(msgs))
 
     @app.on_message(filters.command("addrss"))
