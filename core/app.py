@@ -25,6 +25,7 @@ class _AppState:
     active_tasks: Dict[str, Any] = {}            # task_id -> Task
     user_task_order: Dict[int, list] = {}        # user_id -> [task_id,...]（入队顺序）
     task_progress: Dict[str, dict] = {}          # task_id -> 实时快照（供 Web 台展示）
+    pending_confirm: Dict[str, float] = {}       # 危险操作二次确认（如 /rm），key -> 时间戳
 
     @classmethod
     def download_client(cls) -> Any:

@@ -47,7 +47,12 @@ def _stream_kwargs(pyro_client) -> dict:
 
 
 def media_info(message) -> Tuple[str, int]:
-    """从 Pyrogram Message 提取 (filename, size)。"""
+    """从 Pyrogram Message 提取 (filename, size)。含 photo（无文件名，按日期命名）。"""
+    photo = getattr(message, "photo", None)
+    if photo:
+        from datetime import datetime as _dt
+        ts = _dt.fromtimestamp(photo.date or 0).strftime("%Y%m%d_%H%M%S") if photo.date else "photo"
+        return f"photo_{ts}.jpg", photo.file_size or 0
     for attr in ("video", "animation", "audio", "voice", "video_note", "document"):
         m = getattr(message, attr, None)
         if m:

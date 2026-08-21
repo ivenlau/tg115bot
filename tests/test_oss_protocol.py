@@ -240,6 +240,26 @@ def test_movie_pick_best():
     assert score_resource({"name": "F.2160p.mkv", "magnet": "m"}, "magnet").score >= 3
 
 
+def test_parse_share_link():
+    """115 分享链接解析与 Cookie UID 提取。"""
+    import types as _types
+    if "aiohttp" not in sys.modules:
+        _aio = _types.ModuleType("aiohttp")
+        _aio.ClientSession = type("ClientSession", (), {"__init__": lambda s, *a, **k: None})
+        _aio.ClientTimeout = lambda **k: None
+        sys.modules["aiohttp"] = _aio
+    from cloud115.share import _uid_from_cookies, parse_share_link
+
+    assert parse_share_link("https://115.com/s/abc123?password=x9y8") == ("abc123", "x9y8")
+    assert parse_share_link("https://115cdn.com/s/XYZ789?password=1234") == ("XYZ789", "1234")
+    assert parse_share_link("https://115.com/s/abc123") == ("abc123", "")
+    assert parse_share_link("看 https://115.com/s/abc123?password=pw 哈") == ("abc123", "pw")
+    assert parse_share_link("https://baidu.com/s/xxx") is None
+    assert parse_share_link("") is None
+    assert _uid_from_cookies("UID=123456789; CID=1") == "123456789"
+    assert _uid_from_cookies("") == ""
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

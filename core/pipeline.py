@@ -51,6 +51,13 @@ async def _update(task: Task, **kw) -> None:
 
 
 async def run_task(task: Task) -> None:
+    # 直链中转任务：message 字段是 URL（非 TG 消息），走独立管线
+    if getattr(task, "source", "") == "direct":
+        from core.direct_dl import run_direct_task
+        await run_direct_task(task, state.workspace.path_for(task.filename))
+        state.unregister_task(task)
+        return
+
     ws = state.workspace
     cfg = state.config
     reporter = ProgressReporter(

@@ -87,6 +87,13 @@ class LoggingCfg(BaseModel):
     db_buffer: int = 200                # 内存缓冲条数；>0 启用 DB 日志落盘
 
 
+class ShareCfg(BaseModel):
+    # 分享链接转存（可选）。⚠️ 转存接口仅存在于 webapi（Cookie 鉴权），
+    # 开放平台无对应端点；不配置则"发分享链接转存"功能停用，不影响其他功能。
+    cookies: str = ""
+    target_dir: str = "/tg115bot/shared"   # 转存默认目录
+
+
 class MovieSubCfg(BaseModel):
     # nullbr API 授权（https://nullbr.online/api 申请）；留空则电影订阅功能停用
     app_id: str = ""
@@ -113,6 +120,7 @@ class AppConfig(BaseModel):
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
     security: SecurityCfg = Field(default_factory=SecurityCfg)
     movie_sub: MovieSubCfg = Field(default_factory=MovieSubCfg)
+    share: ShareCfg = Field(default_factory=ShareCfg)
 
     @property
     def primary_account(self) -> AccountCfg:

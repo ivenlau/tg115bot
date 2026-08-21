@@ -4,7 +4,9 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 
 from pyrogram import filters
 from pyrogram.types import Message
@@ -34,7 +36,14 @@ HELP = (
     "/addrss `<RSS地址> [目录] [关键词...]` — 订阅 RSS 自动离线\n"
     "/rsss — 查看订阅 / `/delrss <ID>` — 退订\n"
     "/sub `<片名>` — 订阅电影（资源发布自动离线，需 nullbr API）\n"
-    "/subs — 订阅列表 / `/unsub <ID>` — 取消订阅"
+    "/subs — 订阅列表 / `/unsub <ID>` — 取消订阅\n"
+    "/status — 115 空间/离线配额/风控余量/账号/队列一览\n"
+    "/ls `<115路径>` — 列目录　`/search <关键词>` — 全盘搜索\n"
+    "/rm `<路径>` — 删除（二次确认）　`/mv <源路径> <目的目录>` — 移动\n"
+    "/backup `<频道ID或@用户名> [目录]` — 整频道历史备份（断点续传）\n"
+    "/backups — 备份进度　`/backupstop <ID>` — 暂停备份\n"
+    "发 115 分享链接（含访问码）自动转存（需 config.share.cookies）\n"
+    "/dl `<http直链>` — 本地中转下载后上传（服务器直连或走代理）"
 )
 
 
@@ -253,8 +262,26 @@ def register(app) -> None:
 
     media_filter = (
         filters.video | filters.animation | filters.audio | filters.voice
-        | filters.video_note | filters.document
+        | filters.video_note | filters.document | filters.photo
     )
+
+    # ── 相册聚合：同 media_group_id 的消息缓冲后逐个入队（顺序稳定） ──────
+    _album_buf: dict = {}          # group_id -> {"msgs": [...], "timer": Task}
+    ALBUM_WINDOW = 2.0             # 聚合窗口（秒）：同组消息到达间隔上限
+
+    async def _flush_album(group_id: str):
+        buf = _album_buf.pop(group_id, None)
+        if not buf:
+            return
+        msgs = sorted(buf["msgs"], key=lambda m: m.id)   # 按消息序号保序
+        first = msgs[0]
+        total = sum(media_info(m)[1] for m in msgs)
+        await with_flood_wait(lambda: first.reply_text(
+            f"📸 相册已加入队列（{len(msgs)} 项 / {human_bytes(total)}），将按顺序上传"
+        ))
+        for m in msgs:
+            await _enqueue_media(m, album_note=f"相册 {group_id[-6:]}")
+        log.info("相册入队: %s (%d 项)", group_id, len(msgs))
 
     @app.on_message(filters.command("addrss"))
     async def _addrss(_, message: Message):
@@ -387,22 +414,380 @@ def register(app) -> None:
         await state.db.delete_movie_sub(int(parts[1]))
         await message.reply_text(f"✅ 已取消订阅 {parts[1]}")
 
+    @app.on_message(filters.command("status"))
+    async def _status(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None:
+            await message.reply_text("⚠️ 115 未初始化")
+            return
+        cfg = get_config()
+        lines = ["**📊 tg115bot 状态**", ""]
+
+        # 账号
+        for a in state.accounts.status_list():
+            cd = f" (冷却 {a['cooldown_sec']}s)" if a.get("cooldown_sec") else ""
+            lines.append(f"👤 {a['name']}: {a['status']}{cd}")
+        lines.append("")
+
+        # 队列
+        if state.queue is not None:
+            lines.append(f"🌀 队列：进行中/待处理 {len(state.task_progress)} / {state.queue.qsize()}")
+        if state.workspace is not None:
+            lines.append(f"💾 本地磁盘剩余：{human_bytes(state.workspace.free_bytes())}"
+                         f"（下限 {cfg.storage.min_free_gb}GB）")
+
+        # 115 侧（尽力而为，任一失败不阻断）
+        try:
+            cloud = await state.accounts.get()
+            space = await cloud.raw.user_space()
+            if space.get("total"):
+                used_pct = space["used"] * 100 / space["total"]
+                lines.append(f"☁️ 115 空间：{human_bytes(space['used'])} / "
+                             f"{human_bytes(space['total'])}（{used_pct:.1f}%）")
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"☁️ 115 空间：获取失败（{e}）")
+        try:
+            quota = await cloud.raw.offline_quota()
+            if quota:
+                lines.append(f"⬇️ 离线配额：已用 {quota.get('used', '?')} / {quota.get('count', '?')}")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            cnt = cloud.raw.request_count
+            lines.append(f"🛡️ 今日 115 API 请求：{cnt}（风控阈值 {cloud.raw.daily_limit}）")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 离线任务统计
+        if state.db is not None:
+            from persistence.models import OFFLINE_DONE, OFFLINE_FAILED
+            pend = await state.db.offline_by_status("pending", "running", "retrying")
+            lines.append(f"📦 离线任务：进行中 {len(pend)}")
+
+        await message.reply_text("\n".join(lines))
+
+    @app.on_message(filters.command("ls"))
+    async def _ls(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None:
+            await message.reply_text("⚠️ 115 未初始化")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        path = parts[1].strip() if len(parts) > 1 else "/"
+        try:
+            cloud = await state.accounts.get()
+            if path.strip() != "/":
+                info = await cloud.raw.get_file_info(path)
+                if not info or info.get("file_id") is None:
+                    await message.reply_text(f"❌ 路径不存在: {path}")
+                    return
+                cid = int(info["file_id"])
+            else:
+                cid = 0
+            data = await cloud.raw.list_files(cid, limit=50)
+            items = data.get("list") or []
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 列目录失败: {e}")
+            return
+        if not items:
+            await message.reply_text(f"📁 {path}（空目录）")
+            return
+        from core.progress import human_bytes as _hb
+        lines = [f"📁 **{path}**（{len(items)} 项）"]
+        for it in items[:30]:
+            name = it.get("fn") or it.get("n") or it.get("file_name") or "?"
+            is_dir = str(it.get("fc") or it.get("file_category") or "1") == "0"
+            size = it.get("fs") or it.get("size") or 0
+            lines.append(f"{'📂' if is_dir else '📄'} {name}" + ("" if is_dir else f" `{_hb(size)}`"))
+        if len(items) > 30:
+            lines.append(f"… 等共 {len(items)} 项")
+        await message.reply_text("\n".join(lines))
+
+    @app.on_message(filters.command("search"))
+    async def _search(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None:
+            await message.reply_text("⚠️ 115 未初始化")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("用法: /search 关键词")
+            return
+        keyword = parts[1].strip()
+        try:
+            cloud = await state.accounts.get()
+            data = await cloud.raw.search_files(keyword, limit=20)
+            items = data.get("list") or []
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 搜索失败: {e}")
+            return
+        if not items:
+            await message.reply_text(f"🔍 未找到: {keyword}")
+            return
+        from core.progress import human_bytes as _hb
+        lines = [f"🔍 **{keyword}**（{len(items)} 项）"]
+        for it in items[:20]:
+            name = it.get("fn") or it.get("n") or it.get("file_name") or "?"
+            size = it.get("fs") or it.get("size") or 0
+            lines.append(f"📄 {name} `{_hb(size)}`" if size else f"📄 {name}")
+        await message.reply_text("\n".join(lines))
+
+    @app.on_message(filters.command("rm"))
+    async def _rm(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None:
+            await message.reply_text("⚠️ 115 未初始化")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("用法: /rm /tg115bot/旧文件.mp4（入回收站）")
+            return
+        path = parts[1].strip()
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        key = f"rm:{message.from_user.id}:{path}"
+        state.pending_confirm = getattr(state, "pending_confirm", {})
+        state.pending_confirm[key] = time.time()
+        await message.reply_text(
+            f"⚠️ 确认删除（移入回收站）？\n📄 {path}\n\n30 秒内回复 /yes 确认",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ 确认删除", callback_data=f"rmok|{key}"),
+                InlineKeyboardButton("取消", callback_data="rmno"),
+            ]]),
+        )
+
+    @app.on_callback_query()
+    async def _on_confirm(client, query):
+        data = query.data or ""
+        if data == "rmno":
+            await query.answer("已取消")
+            await query.message.edit_text("🚫 已取消删除")
+            return
+        if not data.startswith("rmok|"):
+            return
+        key = data[4:]
+        pend = getattr(state, "pending_confirm", {})
+        ts = pend.pop(key, None)
+        if ts is None or time.time() - ts > 60:
+            await query.answer("已过期")
+            await query.message.edit_text("⌛ 确认已过期，请重新 /rm")
+            return
+        path = key.split(":", 2)[2]
+        try:
+            cloud = await state.accounts.get()
+            info = await cloud.raw.get_file_info(path)
+            if not info or info.get("file_id") is None:
+                await query.message.edit_text(f"❌ 路径不存在: {path}")
+                return
+            await cloud.raw.delete_files(str(info["file_id"]))
+            await query.message.edit_text(f"🗑 已删除（回收站）: {path}")
+        except Exception as e:  # noqa: BLE001
+            await query.message.edit_text(f"❌ 删除失败: {e}")
+
+    @app.on_message(filters.command("mv"))
+    async def _mv(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None:
+            await message.reply_text("⚠️ 115 未初始化")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 3:
+            await message.reply_text("用法: /mv /tg115bot/旧目录/文件.mp4 /tg115bot/新目录")
+            return
+        src, dst = parts[1], parts[2]
+        try:
+            cloud = await state.accounts.get()
+            si = await cloud.raw.get_file_info(src)
+            if not si or si.get("file_id") is None:
+                await message.reply_text(f"❌ 源不存在: {src}")
+                return
+            di = await cloud.raw.get_file_info(dst)
+            if not di or di.get("file_id") is None:
+                to_cid = await cloud.raw.create_dir_recursive(dst)
+            else:
+                to_cid = int(di["file_id"])
+            await cloud.raw.move_files(str(si["file_id"]), to_cid)
+            await message.reply_text(f"✅ 已移动\n{src}\n→ {dst}")
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 移动失败: {e}")
+
+    @app.on_message(filters.command("backup"))
+    async def _backup(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None or state.accounts is None:
+            await message.reply_text("⚠️ 服务未就绪")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.reply_text(
+                "用法: /backup <频道ID或@频道用户名> [保存目录]\n"
+                "例: /backup -1001234567890 /tg115bot/archive\n"
+                "bot 需已加入该频道；中断后重发命令自动续传"
+            )
+            return
+        chan = parts[1]
+        cfg = get_config()
+        save_path = parts[2] if len(parts) > 2 and parts[2].startswith("/") else cfg.upload.target_dir
+        # 解析频道 -> chat
+        try:
+            chat = await state.pyro_bot.get_chat(chan)
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 找不到频道 {chan}: {e}")
+            return
+        from core.backup import start_backup
+        ok, msg = await start_backup(chat.id, chat.title or str(chan), save_path,
+                                     message.chat.id)
+        await message.reply_text(("🚀 " if ok else "⚠️ ") + msg + f"\n频道: {chat.title or chan}\n📁 {save_path}")
+
+    @app.on_message(filters.command("backups"))
+    async def _backups(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("⚠️ 持久化未启用")
+            return
+        rows = await state.db.list_backups()
+        if not rows:
+            await message.reply_text("暂无备份。用法: /backup <频道ID或@用户名> [目录]")
+            return
+        icon = {"running": "▶️", "paused": "⏸", "done": "✅"}
+        lines = ["**频道备份**"]
+        for r in rows:
+            lines.append(
+                f"{icon.get(r.status, '•')} `{r.id}` {r.title or r.channel_id}\n"
+                f"   入队 {r.total_done} / 跳过 {r.skipped} / 断点 #{r.last_message_id}"
+            )
+        await message.reply_text("\n".join(lines))
+
+    @app.on_message(filters.command("backupstop"))
+    async def _backupstop(_, message: Message):
+        if not _authorized(message):
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.reply_text("用法: /backupstop <备份ID>（/backups 查看）")
+            return
+        from core.backup import stop_backup
+        if stop_backup(int(parts[1])):
+            await message.reply_text("⏸ 停止请求已发出，进度已保存")
+        else:
+            await message.reply_text("该备份不在运行中")
+
+    async def _do_share(message: Message, text: str):
+        """转存 115 分享链接到默认目录。"""
+        cfg = get_config()
+        if not cfg.share.cookies:
+            await message.reply_text(
+                "⚠️ 未配置转存凭据（config.yaml 的 share.cookies），\n"
+                "浏览器登录 115 后复制 Cookie 填入并重启"
+            )
+            return
+        from cloud115.share import parse_share_link, share_list, share_receive
+        parsed = parse_share_link(text)
+        if not parsed:
+            await message.reply_text("❌ 无法解析分享链接")
+            return
+        share_code, receive_code = parsed
+        if not receive_code:
+            await message.reply_text("🔗 请用带访问码的完整链接（...?password=访问码）")
+            return
+        try:
+            info, files = await share_list(cfg.share.cookies, share_code, receive_code)
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 读取分享失败: {e}")
+            return
+        if not files:
+            await message.reply_text("📁 分享为空")
+            return
+        names = [f.get("n") or f.get("fn") or "?" for f in files[:5]]
+        more = f" 等 {len(files)} 项" if len(files) > 5 else ""
+        saving = await message.reply_text(
+            f"📥 转存中: {', '.join(names)}{more}\n📁 {cfg.share.target_dir}"
+        )
+        try:
+            cloud = await state.accounts.get()
+            cid = await cloud.raw.create_dir_recursive(cfg.share.target_dir)
+            fids = [str(f.get("fid") or f.get("f") or "") for f in files]
+            fids = [f for f in fids if f]
+            await share_receive(cfg.share.cookies, share_code, receive_code, fids, cid)
+        except Exception as e:  # noqa: BLE001
+            await message.reply_text(f"❌ 转存失败: {e}")
+            return
+        await saving.edit_text(
+            f"✅ 转存完成（{len(fids)} 项）\n📁 {cfg.share.target_dir}\n"
+            f"来自: {info.get('share_title') or share_code}"
+        )
+
+    @app.on_message(filters.command("dl"))
+    async def _dl(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.accounts is None or state.workspace is None:
+            await message.reply_text("⚠️ 服务未就绪")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text(
+                "用法: /dl <http直链>\n"
+                "本地中转下载后上传 115（与离线互补：115 离线搞不定的直链源用这个）"
+            )
+            return
+        url = parts[1].strip()
+        from urllib.parse import urlparse as _up
+        if _up(url).scheme not in ("http", "https"):
+            await message.reply_text("链接需以 http(s):// 开头")
+            return
+        cfg = get_config()
+        target_dir = state.user_target_dirs.get(message.from_user.id) or cfg.upload.target_dir
+        from core.direct_dl import url_filename
+        name = url_filename(url)
+        ws = state.workspace
+        if ws is not None and not ws.has_enough_space(0):
+            await message.reply_text("⚠️ 磁盘空间不足，暂停接新任务")
+            return
+        tracking = await with_flood_wait(lambda: message.reply_text(
+            f"📥 直链任务已加入队列\n📄 {name}\n🔗 {url[:80]}\n📁 {target_dir}"
+        ))
+        task = Task(
+            user_id=message.from_user.id if message.from_user else 0,
+            message=url,            # 直链任务复用 message 字段存 URL
+            filename=name, size=0, target_dir=target_dir,
+            tracking_chat_id=tracking.chat.id, tracking_message_id=tracking.id,
+            source="direct",
+        )
+        state.register_task(task)
+        await state.queue.put(task)
+        log.info("直链入队: %s -> %s", url[:80], target_dir)
+
     @app.on_message(filters.text & ~filters.command(
         ["start", "help", "setdir", "auth", "cancel", "channels",
-         "addchannel", "delchannel", "offline", "offlines"]))
+         "addchannel", "delchannel", "offline", "offlines",
+         "addrss", "rsss", "delrss", "sub", "subs", "unsub",
+         "status", "ls", "search", "rm", "mv", "yes",
+         "backup", "backups", "backupstop", "dl"]))
     async def on_link(_, message: Message):
-        """纯文本链接（magnet/ed2k/直链）自动识别为离线下载。"""
+        """纯文本：115 分享链接 -> 转存；magnet/ed2k/直链 -> 离线下载。"""
         if not _authorized(message):
             return
-        kind = classify_link(message.text or "")
+        text = (message.text or "").strip()
+        cfg = get_config()
+        if cfg.share.cookies:
+            from cloud115.share import parse_share_link
+            if parse_share_link(text):
+                await _do_share(message, text)
+                return
+        kind = classify_link(text)
         if kind is None:
             return   # 普通文本，忽略
-        await _do_offline(message, (message.text or "").strip())
+        await _do_offline(message, text)
 
-    @app.on_message(media_filter)
-    async def on_media(_, message: Message):
-        if not _authorized(message):
-            return
+    async def _enqueue_media(message: Message, album_note: str = "") -> None:
+        """单条媒体消息入队（含磁盘预检与跟踪消息）。"""
         name, size = media_info(message)
         cfg = get_config()
         target_dir = (
@@ -436,4 +821,25 @@ def register(app) -> None:
         await state.queue.put(task)
         if state.low_disk_alerted and ws is not None and ws.has_enough_space(size):
             state.low_disk_alerted = False   # 恢复
-        log.info("入队: %s (%d bytes) -> %s", name, size, target_dir)
+        log.info("入队: %s (%d bytes) -> %s%s", name, size, target_dir,
+                 f" [{album_note}]" if album_note else "")
+
+    @app.on_message(media_filter)
+    async def on_media(_, message: Message):
+        if not _authorized(message):
+            return
+        # 相册：同组消息缓冲 ALBUM_WINDOW 秒后聚合入队（保序）
+        gid = getattr(message, "media_group_id", None)
+        if gid:
+            buf = _album_buf.get(gid)
+            if buf:
+                buf["msgs"].append(message)
+                buf["timer"].cancel()
+            else:
+                buf = {"msgs": [message]}
+                _album_buf[gid] = buf
+            buf["timer"] = asyncio.get_event_loop().call_later(
+                ALBUM_WINDOW, lambda: asyncio.ensure_future(_flush_album(gid))
+            )
+            return
+        await _enqueue_media(message)

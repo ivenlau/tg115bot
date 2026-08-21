@@ -14,8 +14,8 @@ from typing import Any, List, Optional
 import aiosqlite
 
 from persistence.models import (
-    AccountRow, ChannelRuleRow, LogRow, MovieSubRow, OfflineTaskRow,
-    RssFeedRow, TaskRow, STATUS_QUEUED,
+    AccountRow, BackupRow, ChannelRuleRow, LogRow, MovieSubRow,
+    OfflineTaskRow, RssFeedRow, TaskRow, STATUS_QUEUED,
 )
 
 log = logging.getLogger(__name__)
@@ -112,6 +112,21 @@ CREATE TABLE IF NOT EXISTS movie_subs (
     created_at  REAL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_movie_tmdb ON movie_subs(tmdb_id);
+
+CREATE TABLE IF NOT EXISTS channel_backups (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id  INTEGER NOT NULL,
+    title       TEXT,
+    save_path   TEXT,
+    status      TEXT,
+    last_message_id INTEGER DEFAULT 0,
+    total_done  INTEGER DEFAULT 0,
+    skipped     INTEGER DEFAULT 0,
+    chat_id     INTEGER,
+    created_at  REAL,
+    updated_at  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_backup_channel ON channel_backups(channel_id);
 
 CREATE TABLE IF NOT EXISTS logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,6 +437,45 @@ class Database:
         await self.conn.execute("DELETE FROM movie_subs WHERE id=?", (sub_id,))
         await self.conn.commit()
 
+    # ── 频道备份 ─────────────────────────────────────────────────────────
+    async def get_backup_by_channel(self, channel_id: int) -> Optional[BackupRow]:
+        async with self.conn.execute(
+            "SELECT * FROM channel_backups WHERE channel_id=? ORDER BY id DESC LIMIT 1",
+            (channel_id,),
+        ) as cur:
+            r = await cur.fetchone()
+        return _backup_row(r) if r else None
+
+    async def add_backup(self, channel_id: int, title: str, save_path: str,
+                         chat_id: int) -> Optional[BackupRow]:
+        existing = await self.get_backup_by_channel(channel_id)
+        if existing and existing.status == "running":
+            return None
+        cur = await self.conn.execute(
+            """INSERT INTO channel_backups(channel_id,title,save_path,status,chat_id,created_at,updated_at)
+               VALUES(?,?,?,'running',?,?,?)""",
+            (channel_id, title, save_path, chat_id, time.time(), time.time()),
+        )
+        await self.conn.commit()
+        return await self.get_backup_by_channel(channel_id)
+
+    async def update_backup(self, backup_id: int, **kw) -> None:
+        allowed = ("status", "last_message_id", "total_done", "skipped")
+        sets, params = [], []
+        for k, v in kw.items():
+            if k in allowed:
+                sets.append(f"{k}=?"); params.append(v)
+        if not sets:
+            return
+        sets.append("updated_at=?"); params.append(time.time()); params.append(backup_id)
+        await self.conn.execute(f"UPDATE channel_backups SET {', '.join(sets)} WHERE id=?", params)
+        await self.conn.commit()
+
+    async def list_backups(self) -> List[BackupRow]:
+        async with self.conn.execute("SELECT * FROM channel_backups ORDER BY id DESC") as cur:
+            rows = await cur.fetchall()
+        return [_backup_row(r) for r in rows]
+
     # ── 日志 ─────────────────────────────────────────────────────────────
     async def insert_logs(self, entries: List[LogRow]) -> None:
         if not entries:
@@ -482,6 +536,16 @@ def _account_row(r: aiosqlite.Row) -> AccountRow:
         enabled=bool(r["enabled"]), status=r["status"] or "unknown",
         last_used_at=r["last_used_at"] or 0.0, last_error=r["last_error"] or "",
         updated_at=r["updated_at"] or 0.0,
+    )
+
+
+def _backup_row(r: aiosqlite.Row) -> BackupRow:
+    return BackupRow(
+        id=r["id"], channel_id=r["channel_id"], title=r["title"] or "",
+        save_path=r["save_path"] or "", status=r["status"] or "running",
+        last_message_id=r["last_message_id"] or 0, total_done=r["total_done"] or 0,
+        skipped=r["skipped"] or 0, chat_id=r["chat_id"] or 0,
+        created_at=r["created_at"] or 0.0, updated_at=r["updated_at"] or 0.0,
     )
 
 

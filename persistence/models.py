@@ -128,3 +128,24 @@ class MovieSubRow:
     download_url: str = ""
     chat_id: int = 0
     created_at: float = 0.0
+
+
+# 频道备份状态
+BACKUP_RUNNING = "running"
+BACKUP_PAUSED = "paused"
+BACKUP_DONE = "done"
+
+
+@dataclass
+class BackupRow:
+    id: int = 0
+    channel_id: int = 0
+    title: str = ""
+    save_path: str = ""
+    status: str = BACKUP_RUNNING
+    last_message_id: int = 0      # 断点：已处理到的消息 id（从新到旧递减）
+    total_done: int = 0           # 已入队媒体数
+    skipped: int = 0              # 跳过（无媒体/规则不命中）数
+    chat_id: int = 0              # 进度通知发往
+    created_at: float = 0.0
+    updated_at: float = 0.0

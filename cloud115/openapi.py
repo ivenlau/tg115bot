@@ -434,6 +434,57 @@ class Open115Client:
     def offline_failed(task: Dict[str, Any]) -> bool:
         return task.get("status") == -1
 
+    async def search_files(self, keyword: str, limit: int = 20) -> Dict[str, Any]:
+        """全盘搜索文件/目录。GET /open/ufile/search（上限 1 万条，count 仅作参考）。"""
+        resp = await self._request(
+            "GET", f"{BASE_API}/open/ufile/search",
+            params={"aid": 1, "cid": 0, "limit": limit, "offset": 0,
+                    "show_dir": 1, "search_value": keyword},
+        )
+        if not self._ok(resp):
+            return {"list": [], "error": str(resp)[:200]}
+        data = resp.get("data")
+        if isinstance(data, list):
+            return {"list": data}
+        if isinstance(data, dict) and isinstance(data.get("list"), list):
+            return data
+        return {"list": []}
+
+    async def delete_files(self, file_ids) -> bool:
+        """删除文件/目录（入回收站）。POST /open/ufile/delete，file_ids 逗号分隔。"""
+        if isinstance(file_ids, (list, tuple)):
+            file_ids = ",".join(str(i) for i in file_ids)
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/ufile/delete", data={"file_ids": file_ids},
+        )
+        if self._ok(resp):
+            return True
+        raise RuntimeError(f"删除失败: {str(resp)[:200]}")
+
+    async def move_files(self, file_ids, to_cid: int) -> bool:
+        """移动文件/目录到 to_cid。POST /open/ufile/move。"""
+        if isinstance(file_ids, (list, tuple)):
+            file_ids = ",".join(str(i) for i in file_ids)
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/ufile/move",
+            data={"file_ids": file_ids, "to_cid": to_cid},
+        )
+        if self._ok(resp):
+            return True
+        raise RuntimeError(f"移动失败: {str(resp)[:200]}")
+
+    async def user_space(self) -> Dict[str, Any]:
+        """空间用量：{space, used_size, size_total}（字节）。"""
+        resp = await self._request("GET", f"{BASE_API}/open/user/info")
+        if not self._ok(resp):
+            return {}
+        data = resp.get("data") or {}
+        # 字段名各版本差异，多候选容错
+        return {
+            "used": data.get("used_size") or data.get("space_used") or 0,
+            "total": data.get("size_total") or data.get("space_total") or 0,
+        }
+
     # ── 探活 ─────────────────────────────────────────────────────────────
     async def check_login(self) -> bool:
         try:
