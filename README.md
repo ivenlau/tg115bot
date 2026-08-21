@@ -10,6 +10,9 @@
 - **115 开放平台**：手写协议实现（零第三方 115 SDK 依赖），扫码授权，token 自动刷新
 - **多账号轮转**：加权轮转 + 故障冷却，多账号分摊风控压力
 - **频道监控**：订阅频道 + 关键词白/黑名单 + 目标目录规则，命中自动上传
+- **115 离线下载**：发磁力/ed2k/直链即自动离线（115 服务器下载，不占本地带宽），完成通知 + 失败自动重试
+- **RSS 订阅**：订阅任意 RSS 源，新条目自动提取链接离线，关键词过滤 + 去重
+- **电影订阅**：片名订阅追更，TMDB 匹配 + 资源发布自动离线（分辨率优先 + 中字加分）
 - **文件整理**：重命名模板（`{date}_{filename}` 等）+ 按扩展名归类子目录
 - **Web 管理台**：实时进度、任务历史、账号状态、频道规则、日志查看
 - **持久化**：SQLite 存任务历史与规则，重启不丢
@@ -108,6 +111,12 @@ docker compose logs -f
 | `/channels` | 查看频道监控规则 |
 | `/addchannel <频道ID> <目标目录> [关键词...]` | 新增频道规则（关键词为白名单，留空=全部） |
 | `/delchannel <规则ID>` | 删除频道规则 |
+| `/offline <链接>` | 115 离线下载（磁力/ed2k/直链；**直接发链接也可**） |
+| `/offlines` | 查看离线任务队列 |
+| `/addrss <RSS地址> [目录] [关键词...]` | 订阅 RSS 自动离线（关键词=标题白名单，空=全部） |
+| `/rsss` / `/delrss <ID>` | 查看 / 退订 RSS |
+| `/sub <片名>` | 订阅电影，资源发布自动离线（需 nullbr API） |
+| `/subs` / `/unsub <ID>` | 查看 / 取消电影订阅 |
 
 ### Web 管理台（可选）
 
@@ -121,6 +130,28 @@ docker compose logs -f
 1. 将 bot 加入目标频道；
 2. `channel_monitor.enabled: true`；
 3. 用 `/addchannel` 或 Web 台添加规则。频道 ID 可在 TG 内转发消息给 `@userinfobot` 获取。
+
+### 离线下载
+
+发送磁力 / ed2k / 种子及媒体直链给 bot 即自动离线下载（或 `/offline <链接>`），
+资源在 **115 服务器**下载，不占本地带宽、不经代理。完成自动通知；失败自动重试 2 次。
+`/offlines` 查看队列状态。
+
+### RSS 订阅（可选）
+
+```text
+/addrss https://example.com/feed.xml /tg115bot/pt 1080p HEVC
+```
+
+每 10 分钟检查一次全部订阅源；条目标题命中关键词（留空=全部）且含可下载链接
+（magnet/ed2k/种子及媒体直链）时自动离线，重复条目自动去重。RSS 源经 `telegram.proxy` 抓取。
+
+### 电影订阅（可选，需 nullbr API）
+
+1. 到 https://nullbr.online/api 申请 API 授权；
+2. `config.yaml` 填 `movie_sub.app_id` / `api_key`，重启；
+3. `/sub 流浪地球` —— TMDB 匹配后入订阅表，每 4 小时检查资源，
+   发布即自动离线（优先 ed2k，分辨率 2160p>1080p>720p，中字加分）。
 
 ## 配置项
 
@@ -137,6 +168,8 @@ docker compose logs -f
 | `organize.rename_template` | `{filename}` | 重命名模板（`{date}/{name}/{ext}` 等） |
 | `organize.classify_by_ext` | false | 按扩展名归入子目录 |
 | `channel_monitor.enabled` | false | 频道监控开关 |
+| `movie_sub.app_id/api_key` | 空 | nullbr API 授权（电影订阅，空=停用） |
+| `movie_sub.target_dir` | `/tg115bot/movies` | 电影订阅保存目录 |
 | `web.enable` | false | Web 管理台开关 |
 | `storage.min_free_gb` | 5 | 磁盘可用空间下限，低于则暂停接新任务 |
 
@@ -149,7 +182,7 @@ tg115bot/
 ├── main.py                # 入口
 ├── config.py              # 配置加载（yaml + 环境变量覆盖）
 ├── bot/                   # TG 客户端、命令处理、频道监控
-├── core/                  # 下载/上传/队列/任务编排/文件整理
+├── core/                  # 下载/上传/离线/RSS/电影订阅/队列/整理
 ├── cloud115/              # 115 开放平台 + OSS 直传协议实现
 ├── persistence/           # SQLite 持久化
 ├── web/                   # Web 管理台（FastAPI + HTMX）
