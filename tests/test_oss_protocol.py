@@ -190,6 +190,33 @@ def test_classify_link():
     assert classify_link("a" * 3000) is None
 
 
+def test_rss_extract_and_match():
+    """RSS 条目链接提取与关键词匹配。"""
+    import types as _types
+    if "aiohttp" not in sys.modules:
+        _aio = _types.ModuleType("aiohttp")
+        _aio.ClientSession = type("ClientSession", (), {"__init__": lambda s, *a, **k: None})
+        _aio.ClientTimeout = lambda **k: None
+        sys.modules["aiohttp"] = _aio
+    from core.rss import entry_matches, extract_links
+
+    m = "magnet:?xt=urn:btih:ABCDEF123456789012345"
+    assert extract_links("t", m) == [m]
+    r = extract_links("新片 magnet:?xt=urn:btih:AAAABBBBCCCCDDDD1111&dn=x", "https://b.com/p1")
+    assert r == ["magnet:?xt=urn:btih:AAAABBBBCCCCDDDD1111&dn=x"]   # 网页链接不混入
+    assert extract_links("种子", "https://t.org/x.torrent") == ["https://t.org/x.torrent"]
+    assert extract_links("标题", "https://b.com/p1", "ed2k://|file|x.mkv|123|h|/") == \
+        ["ed2k://|file|x.mkv|123|h|/"]
+    assert extract_links("标题", "https://b.com/p1") == []   # 纯网页条目无链接
+    # 去重：同一条 magnet 同时出现在标题与 link，只返回一条
+    same = "magnet:?xt=urn:btih:AAAABBBBCCCCDDDD1111"
+    assert extract_links(f"m {same}", same) == [same]
+
+    assert entry_matches("anything", []) is True
+    assert entry_matches("4K HEVC 电影", ["4k"]) is True
+    assert entry_matches("720p", ["4K", "HEVC"]) is False
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

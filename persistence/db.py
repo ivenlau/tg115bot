@@ -14,8 +14,8 @@ from typing import Any, List, Optional
 import aiosqlite
 
 from persistence.models import (
-    AccountRow, ChannelRuleRow, LogRow, OfflineTaskRow, TaskRow,
-    STATUS_QUEUED,
+    AccountRow, ChannelRuleRow, LogRow, OfflineTaskRow, RssFeedRow,
+    TaskRow, STATUS_QUEUED,
 )
 
 log = logging.getLogger(__name__)
@@ -80,6 +80,26 @@ CREATE TABLE IF NOT EXISTS offline_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_offline_status ON offline_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_offline_url ON offline_tasks(url);
+
+CREATE TABLE IF NOT EXISTS rss_feeds (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL,
+    name        TEXT,
+    whitelist   TEXT,
+    save_path   TEXT,
+    enabled     INTEGER DEFAULT 1,
+    chat_id     INTEGER,
+    last_fetch  REAL DEFAULT 0,
+    last_error  TEXT,
+    created_at  REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feeds_url ON rss_feeds(url);
+
+CREATE TABLE IF NOT EXISTS rss_seen (
+    url         TEXT PRIMARY KEY,
+    title       TEXT,
+    created_at  REAL
+);
 
 CREATE TABLE IF NOT EXISTS logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +302,65 @@ class Database:
             rows = await cur.fetchall()
         return [_offline_row(r) for r in rows]
 
+    # ── RSS 订阅 ─────────────────────────────────────────────────────────
+    async def list_feeds(self, only_enabled: bool = False) -> List[RssFeedRow]:
+        sql = "SELECT * FROM rss_feeds" + (" WHERE enabled=1" if only_enabled else "") + " ORDER BY id"
+        async with self.conn.execute(sql) as cur:
+            rows = await cur.fetchall()
+        return [_feed_row(r) for r in rows]
+
+    async def get_feed(self, feed_id: int) -> Optional[RssFeedRow]:
+        async with self.conn.execute("SELECT * FROM rss_feeds WHERE id=?", (feed_id,)) as cur:
+            r = await cur.fetchone()
+        return _feed_row(r) if r else None
+
+    async def add_feed(self, url: str, name: str, whitelist: List[str],
+                       save_path: str, chat_id: int) -> Optional[RssFeedRow]:
+        """新增订阅；URL 已存在返回 None。"""
+        async with self.conn.execute(
+            "SELECT id FROM rss_feeds WHERE url=?", (url,)
+        ) as cur:
+            if await cur.fetchone():
+                return None
+        cur = await self.conn.execute(
+            """INSERT INTO rss_feeds(url,name,whitelist,save_path,enabled,chat_id,created_at)
+               VALUES(?,?,?,?,1,?,?)""",
+            (url, name, json.dumps(whitelist or [], ensure_ascii=False),
+             save_path, chat_id, time.time()),
+        )
+        await self.conn.commit()
+        return await self.get_feed(cur.lastrowid or 0)
+
+    async def delete_feed(self, feed_id: int) -> None:
+        await self.conn.execute("DELETE FROM rss_feeds WHERE id=?", (feed_id,))
+        await self.conn.commit()
+
+    async def update_feed(self, feed_id: int, *, last_error: Optional[str] = None,
+                          touch: bool = False) -> None:
+        sets, params = [], []
+        if last_error is not None:
+            sets.append("last_error=?"); params.append(last_error[:200])
+        if touch:
+            sets.append("last_fetch=?"); params.append(time.time())
+        if not sets:
+            return
+        params.append(feed_id)
+        await self.conn.execute(f"UPDATE rss_feeds SET {', '.join(sets)} WHERE id=?", params)
+        await self.conn.commit()
+
+    async def seen_link(self, url: str) -> bool:
+        async with self.conn.execute(
+            "SELECT 1 FROM rss_seen WHERE url=?", (url,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
+    async def mark_seen(self, url: str, title: str = "") -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO rss_seen(url,title,created_at) VALUES(?,?,?)",
+            (url, title, time.time()),
+        )
+        await self.conn.commit()
+
     # ── 日志 ─────────────────────────────────────────────────────────────
     async def insert_logs(self, entries: List[LogRow]) -> None:
         if not entries:
@@ -342,6 +421,16 @@ def _account_row(r: aiosqlite.Row) -> AccountRow:
         enabled=bool(r["enabled"]), status=r["status"] or "unknown",
         last_used_at=r["last_used_at"] or 0.0, last_error=r["last_error"] or "",
         updated_at=r["updated_at"] or 0.0,
+    )
+
+
+def _feed_row(r: aiosqlite.Row) -> RssFeedRow:
+    return RssFeedRow(
+        id=r["id"], url=r["url"], name=r["name"] or "",
+        whitelist=json.loads(r["whitelist"] or "[]"),
+        save_path=r["save_path"] or "", enabled=bool(r["enabled"]),
+        chat_id=r["chat_id"] or 0, last_fetch=r["last_fetch"] or 0.0,
+        last_error=r["last_error"] or "", created_at=r["created_at"] or 0.0,
     )
 
 

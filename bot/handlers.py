@@ -30,7 +30,9 @@ HELP = (
     "/addchannel `<频道ID>` `<目标目录>` `[关键词...]` — 新增频道规则\n"
     "/delchannel `<规则ID>` — 删除频道规则\n"
     "/offline `<链接>` — 115 离线下载（磁力/ed2k/直链，也可直接发链接）\n"
-    "/offlines — 查看离线任务队列"
+    "/offlines — 查看离线任务队列\n"
+    "/addrss `<RSS地址> [目录] [关键词...]` — 订阅 RSS 自动离线\n"
+    "/rsss — 查看订阅 / `/delrss <ID>` — 退订"
 )
 
 
@@ -251,6 +253,71 @@ def register(app) -> None:
         filters.video | filters.animation | filters.audio | filters.voice
         | filters.video_note | filters.document
     )
+
+    @app.on_message(filters.command("addrss"))
+    async def _addrss(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("⚠️ 持久化未启用")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2:
+            await message.reply_text(
+                "用法: /addrss <RSS地址> [保存目录] [关键词...]\n"
+                "例: /addrss https://x.com/feed.xml /tg115bot/pt 4K HEVC\n"
+                "关键词为标题白名单（留空=全部条目）"
+            )
+            return
+        url = parts[1]
+        save_path = parts[2] if len(parts) > 2 and parts[2].startswith("/") else ""
+        kw_start = 3 if save_path else 2
+        keywords = parts[kw_start:]
+        from urllib.parse import urlparse as _up
+        if _up(url).scheme not in ("http", "https"):
+            await message.reply_text("RSS 地址需以 http(s):// 开头")
+            return
+        feed = await state.db.add_feed(url, "", keywords, save_path, message.chat.id)
+        if feed is None:
+            await message.reply_text("⚠️ 该 RSS 已订阅过")
+            return
+        kw = "/".join(keywords) or "(全部)"
+        await message.reply_text(
+            f"✅ 已订阅 RSS #{feed.id}\n{url}\n关键词: {kw}\n📁 {save_path or '(默认目录)'}\n"
+            f"每 10 分钟检查一次，新条目自动离线下载"
+        )
+
+    @app.on_message(filters.command("rsss"))
+    async def _rsss(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("⚠️ 持久化未启用")
+            return
+        feeds = await state.db.list_feeds()
+        if not feeds:
+            await message.reply_text("暂无订阅。用法: /addrss <RSS地址> [目录] [关键词...]")
+            return
+        lines = ["**RSS 订阅**"]
+        for f in feeds:
+            kw = "/".join(f.whitelist) or "(全部)"
+            err = f" ⚠️{f.last_error[:30]}" if f.last_error else ""
+            lines.append(f"`{f.id}` {f.name or f.url[:60]} 关键词:{kw}{err}")
+        await message.reply_text("\n".join(lines))
+
+    @app.on_message(filters.command("delrss"))
+    async def _delrss(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("⚠️ 持久化未启用")
+            return
+        parts = (message.text or "").split()
+        if len(parts) < 2 or not parts[1].isdigit():
+            await message.reply_text("用法: /delrss <订阅ID>")
+            return
+        await state.db.delete_feed(int(parts[1]))
+        await message.reply_text(f"✅ 已退订 {parts[1]}")
 
     @app.on_message(filters.text & ~filters.command(
         ["start", "help", "setdir", "auth", "cancel", "channels",

@@ -95,3 +95,24 @@ class OfflineTaskRow:
     chat_id: int = 0               # 完成通知发往
     created_at: float = 0.0
     updated_at: float = 0.0
+
+
+@dataclass
+class RssFeedRow:
+    id: int = 0
+    url: str = ""                    # RSS/Atom 源地址
+    name: str = ""                   # 备注名
+    whitelist: List[str] = field(default_factory=list)   # 标题关键词（空=全部）
+    save_path: str = ""              # 离线保存目录（空=upload.target_dir）
+    enabled: bool = True
+    chat_id: int = 0                 # 通知发往
+    last_fetch: float = 0.0
+    last_error: str = ""
+    created_at: float = 0.0
+
+
+@dataclass
+class SeenLinkRow:
+    url: str = ""
+    title: str = ""
+    created_at: float = 0.0

@@ -38,6 +38,12 @@ _TORRENT_RE = re.compile(
 )
 
 
+def is_media_url(text: str) -> bool:
+    """严格判定：是否为可直接下载的媒体/种子直链（含扩展名）。
+    RSS 自动离线用——泛 http 网页链接不应自动提交。"""
+    return bool(_TORRENT_RE.match((text or "").strip()))
+
+
 def classify_link(text: str) -> Optional[str]:
     """识别文本是否为可离线的链接；返回 'magnet'|'ed2k'|'url'|None。"""
     t = (text or "").strip()
