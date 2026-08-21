@@ -70,3 +70,11 @@ logging:
 
 security:
   secret_key: ""                   # 留空则读环境变量 TG115BOT_SECRET_KEY；仍空用开发态默认（仅本机）
+
+# ── 电影订阅（可选；需 nullbr API 授权）────────────────────────────────────
+# 申请: https://nullbr.online/api
+movie_sub:
+  app_id: ""
+  api_key: ""
+  target_dir: "/tg115bot/movies"
+  zh_sub_only: false             # true 时只选带中字的资源

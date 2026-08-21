@@ -217,6 +217,29 @@ def test_rss_extract_and_match():
     assert entry_matches("720p", ["4K", "HEVC"]) is False
 
 
+def test_movie_pick_best():
+    """电影资源评分挑选：分辨率优先 + 中字加分。"""
+    import types as _types
+    if "aiohttp" not in sys.modules:
+        _aio = _types.ModuleType("aiohttp")
+        _aio.ClientSession = type("ClientSession", (), {"__init__": lambda s, *a, **k: None})
+        _aio.ClientTimeout = lambda **k: None
+        sys.modules["aiohttp"] = _aio
+    from core.movie_sub import pick_best, score_resource
+
+    items = [
+        {"name": "M.720p.WEB", "ed2k": "ed2k://a", "resolution": "720p", "zh_sub": 0},
+        {"name": "M.2160p.WEB中字", "ed2k": "ed2k://b", "resolution": "2160p", "zh_sub": 1},
+        {"name": "M.1080p", "ed2k": "ed2k://c", "resolution": "1080p", "zh_sub": 0},
+    ]
+    best = pick_best(items, "ed2k")
+    assert best.url == "ed2k://b" and best.zh_sub and best.score == 13
+    assert pick_best(items, "ed2k", require_zh_sub=True).url == "ed2k://b"
+    assert pick_best([], "ed2k") is None
+    assert pick_best([{"name": "x"}], "ed2k") is None
+    assert score_resource({"name": "F.2160p.mkv", "magnet": "m"}, "magnet").score >= 3
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

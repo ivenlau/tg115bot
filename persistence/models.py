@@ -116,3 +116,15 @@ class SeenLinkRow:
     url: str = ""
     title: str = ""
     created_at: float = 0.0
+
+
+@dataclass
+class MovieSubRow:
+    id: int = 0
+    tmdb_id: str = ""
+    movie_name: str = ""
+    save_path: str = ""
+    downloaded: bool = False
+    download_url: str = ""
+    chat_id: int = 0
+    created_at: float = 0.0

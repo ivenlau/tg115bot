@@ -87,6 +87,14 @@ class LoggingCfg(BaseModel):
     db_buffer: int = 200                # 内存缓冲条数；>0 启用 DB 日志落盘
 
 
+class MovieSubCfg(BaseModel):
+    # nullbr API 授权（https://nullbr.online/api 申请）；留空则电影订阅功能停用
+    app_id: str = ""
+    api_key: str = ""
+    target_dir: str = "/tg115bot/movies"   # 电影订阅默认保存目录
+    zh_sub_only: bool = False              # true 时只选带中字的资源
+
+
 class SecurityCfg(BaseModel):
     # 凭据加密密钥口令；留空则读 TG115BOT_SECRET_KEY 环境变量；仍空则用开发态默认（仅本机）
     secret_key: str = ""
@@ -104,6 +112,7 @@ class AppConfig(BaseModel):
     channel_monitor: ChannelMonitorCfg = Field(default_factory=ChannelMonitorCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
     security: SecurityCfg = Field(default_factory=SecurityCfg)
+    movie_sub: MovieSubCfg = Field(default_factory=MovieSubCfg)
 
     @property
     def primary_account(self) -> AccountCfg:
