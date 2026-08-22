@@ -128,6 +128,25 @@ CREATE TABLE IF NOT EXISTS channel_backups (
 );
 CREATE INDEX IF NOT EXISTS idx_backup_channel ON channel_backups(channel_id);
 
+CREATE TABLE IF NOT EXISTS ai_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id     INTEGER NOT NULL,
+    role        TEXT,
+    content     TEXT,
+    created_at  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_session_chat ON ai_sessions(chat_id, id);
+
+CREATE TABLE IF NOT EXISTS ai_tools (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT UNIQUE NOT NULL,
+    description TEXT,
+    parameters  TEXT,            -- JSON schema
+    code        TEXT,            -- Python 函数体（受限沙箱执行）
+    enabled     INTEGER DEFAULT 1,
+    created_at  REAL
+);
+
 CREATE TABLE IF NOT EXISTS logs (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts      REAL,
@@ -475,6 +494,51 @@ class Database:
         async with self.conn.execute("SELECT * FROM channel_backups ORDER BY id DESC") as cur:
             rows = await cur.fetchall()
         return [_backup_row(r) for r in rows]
+
+    # ── AI 会话 ───────────────────────────────────────────────────────────
+    async def ai_history(self, chat_id: int, limit: int = 200) -> List[dict]:
+        """按序取某 chat 的会话消息（role/content），最新在后。"""
+        async with self.conn.execute(
+            "SELECT role, content FROM ai_sessions WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+            (chat_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+    async def ai_append(self, chat_id: int, role: str, content: str) -> None:
+        await self.conn.execute(
+            "INSERT INTO ai_sessions(chat_id, role, content, created_at) VALUES(?,?,?,?)",
+            (chat_id, role, content[:8000], time.time()),
+        )
+        await self.conn.commit()
+
+    async def ai_clear(self, chat_id: int) -> None:
+        await self.conn.execute("DELETE FROM ai_sessions WHERE chat_id=?", (chat_id,))
+        await self.conn.commit()
+
+    # ── AI 动态工具 ───────────────────────────────────────────────────────
+    async def ai_tool_add(self, name: str, description: str,
+                          parameters: str, code: str) -> Optional[int]:
+        try:
+            cur = await self.conn.execute(
+                """INSERT INTO ai_tools(name, description, parameters, code, enabled, created_at)
+                   VALUES(?,?,?,?,1,?)""",
+                (name, description, parameters, code, time.time()),
+            )
+            await self.conn.commit()
+            return cur.lastrowid
+        except Exception:  # noqa: BLE001 -- UNIQUE 冲突等
+            return None
+
+    async def ai_tool_list(self, only_enabled: bool = False) -> List[dict]:
+        sql = "SELECT * FROM ai_tools" + (" WHERE enabled=1" if only_enabled else "") + " ORDER BY id"
+        async with self.conn.execute(sql) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def ai_tool_delete(self, tool_id: int) -> None:
+        await self.conn.execute("DELETE FROM ai_tools WHERE id=?", (tool_id,))
+        await self.conn.commit()
 
     # ── 日志 ─────────────────────────────────────────────────────────────
     async def insert_logs(self, entries: List[LogRow]) -> None:

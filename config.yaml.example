@@ -85,3 +85,16 @@ movie_sub:
 share:
   cookies: ""
   target_dir: "/tg115bot/shared"
+
+# ── AI 助手模式（可选；OpenAI 兼容协议）─────────────────────────────────────
+# api_key 与 model 均非空才启用；留空则功能完全不加载。
+# DeepSeek/Qwen/OpenAI/Ollama/one-api 网关皆可；请求走 telegram.proxy。
+ai:
+  provider: "openai-compatible"
+  base_url: "https://api.deepseek.com/v1"   # 留空 = 官方 api.openai.com
+  api_key: ""
+  model: ""                    # 如 deepseek-chat / gpt-4o / qwen-max
+  max_history: 20              # 每会话保留的消息轮数
+  max_tool_rounds: 8           # 单次对话工具调用循环上限（防失控）
+  temperature: 0.3
+  system_prompt: ""            # 额外人设（追加到内置系统提示后）

@@ -102,6 +102,23 @@ class MovieSubCfg(BaseModel):
     zh_sub_only: bool = False              # true 时只选带中字的资源
 
 
+class AiCfg(BaseModel):
+    # AI 助手模式（可选）。OpenAI 兼容协议（DeepSeek/Qwen/OpenAI/Ollama/one-api 网关皆可）。
+    # api_key 与 model 均非空才启用；留空则功能完全不加载，行为与纯命令模式一致。
+    provider: str = "openai-compatible"
+    base_url: str = ""              # 如 https://api.deepseek.com/v1；空=官方 api.openai.com
+    api_key: str = ""
+    model: str = ""                 # 如 deepseek-chat / gpt-4o / qwen-max
+    max_history: int = 20           # 每会话保留的最大消息轮数
+    max_tool_rounds: int = 8        # 单次对话工具调用循环上限（防失控）
+    temperature: float = 0.3
+    system_prompt: str = ""         # 额外人设；空=内置默认
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key and self.model)
+
+
 class SecurityCfg(BaseModel):
     # 凭据加密密钥口令；留空则读 TG115BOT_SECRET_KEY 环境变量；仍空则用开发态默认（仅本机）
     secret_key: str = ""
@@ -121,6 +138,7 @@ class AppConfig(BaseModel):
     security: SecurityCfg = Field(default_factory=SecurityCfg)
     movie_sub: MovieSubCfg = Field(default_factory=MovieSubCfg)
     share: ShareCfg = Field(default_factory=ShareCfg)
+    ai: AiCfg = Field(default_factory=AiCfg)
 
     @property
     def primary_account(self) -> AccountCfg:

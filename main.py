@@ -103,6 +103,15 @@ async def main() -> None:
     me = await bot.get_me()
     log.info("bot 已上线：@%s - 发送视频/文件即上传到 115", me.username)
 
+    # ── AI 助手（配置启用才加载） ─────────────────────────────────────────
+    if cfg.ai.enabled:
+        from ai import tools as _ai_tools  # noqa: F401 触发工具注册
+        from ai.agent import load_sessions
+        from ai.dynamic import load_dynamic_tools
+        await load_dynamic_tools()
+        await load_sessions()
+        log.info("AI 助手已启用（模型=%s，工具=%d）", cfg.ai.model, len(_ai_tools.TOOLS))
+
     # ── Web 管理台 ───────────────────────────────────────────────────────
     web = await _start_web(cfg)
 

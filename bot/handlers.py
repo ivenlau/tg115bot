@@ -43,7 +43,9 @@ HELP = (
     "/backup `<频道ID或@用户名> [目录]` — 整频道历史备份（断点续传）\n"
     "/backups — 备份进度　`/backupstop <ID>` — 暂停备份\n"
     "发 115 分享链接（含访问码）自动转存（需 config.share.cookies）\n"
-    "/dl `<http直链>` — 本地中转下载后上传（服务器直连或走代理）"
+    "/dl `<http直链>` — 本地中转下载后上传（服务器直连或走代理）\n"
+    "/ai — AI 助手模式开关/状态（配置后普通文本即对话） | /aireset — 清空 AI 记忆\n"
+    "/aitools — 查看/删除 AI 创建的动态工具"
 )
 
 
@@ -570,6 +572,26 @@ def register(app) -> None:
     @app.on_callback_query()
     async def _on_confirm(client, query):
         data = query.data or ""
+        if data.startswith("aitool|"):
+            # 动态工具启用确认
+            _, row_id, ok = data.split("|")
+            from ai.dynamic import confirm as ai_confirm
+            result = await ai_confirm(int(row_id), ok == "1")
+            await query.answer()
+            await query.message.edit_text(f"🛠 {result}")
+            return
+        if data.startswith("aitooldel|"):
+            row_id = int(data.split("|")[1])
+            if state.db is None:
+                return
+            rows = await state.db.ai_tool_list()
+            row = next((r for r in rows if r["id"] == row_id), None)
+            if row:
+                from ai.dynamic import delete_by_name
+                result = await delete_by_name(row["name"])
+                await query.answer()
+                await query.message.edit_text(result)
+            return
         if data == "rmno":
             await query.answer("已取消")
             await query.message.edit_text("🚫 已取消删除")
@@ -686,6 +708,89 @@ def register(app) -> None:
         else:
             await message.reply_text("该备份不在运行中")
 
+    async def _maybe_ai(message: Message, text: str):
+        """AI 模式入口：配置启用则进 agent 循环；否则静默忽略（保持纯命令行为）。"""
+        from ai import agent as ai_agent
+        if not ai_agent.enabled():
+            return
+        status_msg = None
+
+        async def _status(note: str):
+            nonlocal status_msg
+            try:
+                if status_msg is None:
+                    status_msg = await message.reply_text(note)
+                else:
+                    await status_msg.edit_text(note)
+            except Exception:  # noqa: BLE001
+                pass
+
+        reply = await ai_agent.chat(message.chat.id,
+                                    message.from_user.id if message.from_user else 0,
+                                    text, on_status=_status)
+        if reply is None:
+            return
+        try:
+            if status_msg is not None:
+                await status_msg.delete()
+        except Exception:  # noqa: BLE001
+            pass
+        await message.reply_text(reply[:4000])
+
+    @app.on_message(filters.command("ai"))
+    async def _ai(_, message: Message):
+        if not _authorized(message):
+            return
+        from config import get_config
+        cfg = get_config()
+        if not cfg.ai.enabled:
+            await message.reply_text(
+                "AI 模式未配置。\n"
+                "在 config.yaml 的 ai 段填 base_url/api_key/model 后重启启用。"
+            )
+            return
+        parts = (message.text or "").split()
+        if len(parts) > 1 and parts[1].lower() in ("on", "off"):
+            from core.app import state as _st
+            _st.ai_runtime_enabled = parts[1].lower() == "on"
+            await message.reply_text(f"AI 模式：{'✅ 开' if _st.ai_runtime_enabled else '⏸ 关'}")
+            return
+        model = cfg.ai.model
+        await message.reply_text(
+            f"🤖 AI 模式已启用（{model}）\n\n"
+            f"直接发普通文本即可对话，我会调用工具帮你操作网盘。\n"
+            f"/aireset 清空对话记忆 | /ai off 临时关闭"
+        )
+
+    @app.on_message(filters.command("aitools"))
+    async def _aitools(_, message: Message):
+        if not _authorized(message):
+            return
+        if state.db is None:
+            await message.reply_text("⚠️ 持久化未启用")
+            return
+        rows = await state.db.ai_tool_list()
+        if not rows:
+            await message.reply_text("暂无动态工具。AI 对话中可让它用 create_dynamic_tool 创建。")
+            return
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = [[InlineKeyboardButton(f"🗑 {r['name']}", callback_data=f"aitooldel|{r['id']}")]
+              for r in rows]
+        lines = ["**动态工具**"]
+        for r in rows:
+            mark = "✅" if r["enabled"] else "⏳待确认"
+            lines.append(f"{mark} {r['name']}: {(r['description'] or '')[:50]}")
+        lines.append("\n点下方按钮删除")
+        await message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+
+    @app.on_message(filters.command("aireset"))
+    async def _aireset(_, message: Message):
+        if not _authorized(message):
+            return
+        from ai.agent import reset_session
+        await reset_session(message.chat.id)
+        await message.reply_text("🧹 AI 对话记忆已清空")
+
     async def _do_share(message: Message, text: str):
         """转存 115 分享链接到默认目录。"""
         cfg = get_config()
@@ -777,7 +882,8 @@ def register(app) -> None:
          "addchannel", "delchannel", "offline", "offlines",
          "addrss", "rsss", "delrss", "sub", "subs", "unsub",
          "status", "ls", "search", "rm", "mv", "yes",
-         "backup", "backups", "backupstop", "dl"]))
+         "backup", "backups", "backupstop", "dl", "ai", "aireset",
+         "aitools"]))
     async def on_link(_, message: Message):
         """纯文本：115 分享链接 -> 转存；magnet/ed2k/直链 -> 离线下载。"""
         if not _authorized(message):
@@ -791,7 +897,8 @@ def register(app) -> None:
                 return
         kind = classify_link(text)
         if kind is None:
-            return   # 普通文本，忽略
+            await _maybe_ai(message, text)   # 普通文本 → AI 模式（未启用则忽略）
+            return
         await _do_offline(message, text)
 
     async def _enqueue_media(message: Message, album_note: str = "") -> None:

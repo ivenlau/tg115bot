@@ -26,6 +26,10 @@ class _AppState:
     user_task_order: Dict[int, list] = {}        # user_id -> [task_id,...]（入队顺序）
     task_progress: Dict[str, dict] = {}          # task_id -> 实时快照（供 Web 台展示）
     pending_confirm: Dict[str, float] = {}       # 危险操作二次确认（如 /rm），key -> 时间戳
+    # AI 模式运行时（ai/agent.py 维护）
+    ai_current_chat: int = 0                     # 当前 AI 对话 chat_id（工具里发消息用）
+    ai_current_user: int = 0                     # 当前 AI 对话 user_id（set_target_dir 用）
+    ai_runtime_enabled: bool = True              # /ai on|off 临时开关（配置启用后的运行时门）
 
     @classmethod
     def download_client(cls) -> Any:
