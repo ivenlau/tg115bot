@@ -17,6 +17,7 @@
 - **文件管理**：`/ls` `/search` `/rm` `/mv` 在 TG 里遥控 115 网盘
 - **分享链接转存**：发 115 分享链接（含访问码）自动转存
 - **HTTP 直链中转**：`/dl` 本地中转下载后上传，与 115 离线互补
+- **AI 助手模式（可选）**：配置任意 OpenAI 兼容模型（DeepSeek/Qwen/GPT…）后，直接用自然语言对话操作以上全部功能；AI 还能按需创建新的自定义工具（沙箱执行 + 确认启用）
 - **文件整理**：重命名模板（`{date}_{filename}` 等）+ 按扩展名归类子目录
 - **Web 管理台**：实时进度、任务历史、账号状态、频道规则、日志查看
 - **持久化**：SQLite 存任务历史与规则，重启不丢
@@ -129,6 +130,7 @@ docker compose logs -f
 | `/backup <频道ID或@名> [目录]` | 整频道历史备份（断点续传） |
 | `/backups` / `/backupstop <ID>` | 备份进度 / 暂停 |
 | `/dl <http直链>` | 本地中转下载后上传 |
+| `/ai` `/aireset` `/aitools` | AI 模式开关 / 清空记忆 / 管理动态工具 |
 
 ### Web 管理台（可选）
 
@@ -152,6 +154,25 @@ docker compose logs -f
 发 115 分享链接（`https://115.com/s/xxx?password=访问码`）自动转存到 `share.target_dir`
 （需在 `config.yaml` 配置 `share.cookies`，浏览器登录后复制；该接口仅 Cookie 鉴权）。
 `/dl <直链>` 走本地下载再上传（经 `telegram.proxy`），适合 115 离线不支持或慢的直链源。
+
+### AI 助手模式（可选）
+
+```yaml
+ai:
+  base_url: "https://api.deepseek.com/v1"   # 任意 OpenAI 兼容端点
+  api_key: "sk-..."
+  model: "deepseek-chat"
+```
+
+配置后普通文本消息即进入 AI 对话（命令与链接识别不受影响），例如：
+
+- “帮我把流浪地球2存到网盘，要 4K” → 自动订阅追更
+- “网盘还有多少空间？离线配额呢？” → 调 `full_status` 汇报
+- “订阅这个 RSS，只要 1080p 以上” → `rss_add` + 关键词
+
+AI 可调用全部内置工具（21 个）；需要新能力时它会写一个受限沙箱内的
+Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）。
+会话记忆持久化，重启不丢；`/ai off` 临时停用。
 
 ### 频道回溯备份
 
@@ -197,6 +218,7 @@ docker compose logs -f
 | `movie_sub.app_id/api_key` | 空 | nullbr API 授权（电影订阅，空=停用） |
 | `movie_sub.target_dir` | `/tg115bot/movies` | 电影订阅保存目录 |
 | `share.cookies` | 空 | 分享转存凭据（浏览器 Cookie；空=停用转存） |
+| `ai.base_url/api_key/model` | 空 | AI 助手（OpenAI 兼容；空=停用） |
 | `web.enable` | false | Web 管理台开关 |
 | `storage.min_free_gb` | 5 | 磁盘可用空间下限，低于则暂停接新任务 |
 
@@ -210,6 +232,7 @@ tg115bot/
 ├── config.py              # 配置加载（yaml + 环境变量覆盖）
 ├── bot/                   # TG 客户端、命令处理、频道监控
 ├── core/                  # 下载/上传/离线/RSS/电影订阅/备份/直链/队列/整理
+├── ai/                    # AI 助手：LLM 客户端/工具集/agent 循环/动态工具沙箱
 ├── cloud115/              # 115 开放平台 + OSS 直传协议实现
 ├── persistence/           # SQLite 持久化
 ├── web/                   # Web 管理台（FastAPI + HTMX）
