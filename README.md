@@ -33,7 +33,7 @@ TG 消息 → bot/handlers → core/queue → core/pipeline
 
 ## 快速开始
 
-### 一键初始化（推荐）
+### 一键初始化
 
 ```bash
 git clone https://github.com/ivenlau/tg115bot.git && cd tg115bot
@@ -80,14 +80,23 @@ sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实�
 ./scripts/service.sh restart                 # bot 重连
 ```
 
-### Docker 部署（替代方案）
+### Docker 部署
 
 ```bash
+# 1. 若需要代理（国内服务器访问 TG），先在宿主机部署 mihomo
+sudo ./scripts/setup-mihomo.sh <订阅地址>
+
+# 2. 配置环境变量
+cp .env.example .env    # 填 telegram 段；代理填 http://host.docker.internal:7890
+
+# 3. 启动
 docker compose up -d --build
+
+# 4. 查看日志
 docker compose logs -f
 ```
 
-### 手动安装（不想用脚本）
+### 手动安装
 
 <details>
 <summary>展开手动步骤</summary>

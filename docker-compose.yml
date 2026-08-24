@@ -8,6 +8,9 @@ services:
       - .env
     environment:
       - TZ=Asia/Shanghai
+    # 让容器内可用 host.docker.internal 访问宿主机（如宿主机 mihomo 代理）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # 主配置（只读）+ 可写 config/（session/token）
       - ./config.yaml:/app/config.yaml:ro
