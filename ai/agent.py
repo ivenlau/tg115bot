@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -119,11 +120,21 @@ async def chat(chat_id: int, user_id: int, text: str,
                 final_text = (msg.get("content") or "").strip() or "（空回复）"
                 break
 
-            # assistant 的工具调用意图入历史
-            hist.append({"role": "assistant", "content": msg.get("content") or "",
-                         "tool_calls": tool_calls})
-            messages.append({"role": "assistant", "content": msg.get("content") or "",
-                             "tool_calls": tool_calls})
+            # assistant 的工具调用意图入历史。
+            # wire format 规范：发送回去的 arguments 必须是 JSON 字符串——
+            # llm.chat() 已把它解析成 dict（便于 dispatch），回填前需序列化还原。
+            wire_calls = []
+            for tc in tool_calls:
+                fn = dict(tc.get("function") or {})
+                if not isinstance(fn.get("arguments"), str):
+                    fn["arguments"] = json.dumps(fn.get("arguments") or {},
+                                                 ensure_ascii=False)
+                wire_calls.append({**tc, "function": fn})
+            entry_assistant = {"role": "assistant", "content": msg.get("content") or "",
+                               "tool_calls": wire_calls}
+            # 内存历史保留 dict 形态（本地复用）；发给 LLM 的 messages 用字符串形态
+            hist.append(entry_assistant)
+            messages.append(entry_assistant)
 
             for tc in tool_calls:
                 fn = tc.get("function") or {}
