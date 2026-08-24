@@ -33,75 +33,85 @@ TG 消息 → bot/handlers → core/queue → core/pipeline
 
 ## 快速开始
 
-### 1. 部署代理（国内服务器）
-
-TG 在国内服务器上无法直连，需先部署代理。项目自带一键部署脚本（mihomo/Clash 内核）：
+### 一键初始化（推荐）
 
 ```bash
-sudo scripts/setup-mihomo.sh <订阅地址>     # 交互式输入亦可；支持本地 config.yaml 路径
+git clone https://github.com/ivenlau/tg115bot.git && cd tg115bot
+./scripts/init.sh
 ```
 
-装好后编辑 `config.yaml`（115/OSS 不走代理，国内直连更快）：
+交互式完成 7 步（幂等，重跑安全，已就绪的自动跳过）：
 
-```yaml
-telegram:
-  proxy: "http://127.0.0.1:7890"    # mihomo 默认混合端口；socks5:// 同样支持
-```
+| 步骤 | 内容 | 智能行为 |
+|---|---|---|
+| 1 | 系统依赖（Python ≥ 3.12） | 已装跳过，缺失自动 apt 安装 |
+| 2 | 虚拟环境 + 依赖 | `.venv` + pip，装过自动跳过 |
+| 3 | 代理（mihomo） | 能直连 TG 则跳过；已装直接采用；都不行引导输入订阅部署 |
+| 4 | `config.yaml` | 交互收集 api_id/hash/bot_token、白名单（附获取指引） |
+| 5 | 115 扫码授权 | 可当场扫或稍后在 TG 里 `/auth` |
+| 6 | 可选功能 | AI 模式 / Web 台（回车跳过；Web 强提示改密码） |
+| 7 | 完成提示 | 打印启动命令 |
 
-境外服务器跳过本节（`proxy` 留空）。
-
-### 2. 安装依赖
-
-需要 **Python ≥ 3.12**（Docker 镜像已内置）。TG 客户端使用 pyrofork（pyrogram 维护分支，API 一致）。
+初始化完成后：
 
 ```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+./scripts/service.sh start
 ```
 
-> Debian/Ubuntu 系统 Python 直接 `pip install` 会被 PEP 668 拦截，请使用 venv 或 Docker。
-
-### 3. 配置
+### 服务管理
 
 ```bash
-cp config.yaml.example config.yaml
+./scripts/service.sh start      # 后台启动（nohup，SSH 断开不影响）
+./scripts/service.sh stop       # 优雅停止（进行中上传会收尾，10s 后强杀）
+./scripts/service.sh restart    # 重启（更新代码/改配置后用这个）
+./scripts/service.sh status     # 状态：PID / 内存 / 运行时长
+./scripts/service.sh log [N]    # 跟踪日志（默认尾部 50 行）
 ```
 
-| 配置项 | 获取方式 |
-|---|---|
-| `telegram.api_id` / `api_hash` | https://my.telegram.org 申请 |
-| `telegram.bot_token` | @BotFather 创建 bot 获取 |
-| `telegram.user_session`（可选） | `python scripts/make_session.py` 生成，用于下载 >20MB 视频 |
+- PID 文件防重复启动（校验进程身份，防 PID 复用误杀）
+- 双日志：`logs/stdout.log`（运行输出）+ `logs/tg115bot.log`（业务日志，10MB 轮转）
 
-### 4. 授权 115 账号
+### 代理订阅更新
 
-启动后向 bot 发送 `/auth`，会收到二维码，用 115 APP 扫码即完成授权；
-也可在终端完成（会直接在终端渲染二维码）：
+订阅过期/换机场时（mihomo 节点全挂、TG 失联）：
 
 ```bash
-python scripts/check115.py --auth
+sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实测连通性
+./scripts/service.sh restart                 # bot 重连
 ```
 
-token 自动保存到 `config/open_token_<账号名>.json`（可用 `TG115BOT_SECRET_KEY` 加密，见 `.env.example`）。
-
-可选：跑一次上传链路自检（会在 115 的目标目录留 3 个测试文件，可删）：
-
-```bash
-python scripts/check115.py
-```
-
-### 5. 运行
-
-```bash
-python main.py
-```
-
-或 Docker 部署：
+### Docker 部署（替代方案）
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
+
+### 手动安装（不想用脚本）
+
+<details>
+<summary>展开手动步骤</summary>
+
+```bash
+# 1. 依赖（Python >= 3.12；pyrofork 为 pyrogram 维护分支，API 一致）
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. 配置
+cp config.yaml.example config.yaml    # 填 telegram 段与 proxy
+# api_id/hash: https://my.telegram.org；bot_token: @BotFather
+# 国内服务器 proxy: "http://127.0.0.1:7890"（mihomo 混合端口）
+
+# 3. 115 授权（终端二维码扫码）
+python scripts/check115.py --auth
+
+# 4. 前台运行（调试用；长期运行建议 service.sh）
+python main.py
+```
+
+可选：`python scripts/check115.py` 跑一次上传链路自检（会在 115 留 3 个测试文件，可删）。
+
+</details>
 
 ## 使用
 
@@ -239,7 +249,9 @@ tg115bot/
 ├── utils/                 # 限速/退避、凭据加密、日志
 ├── tests/                 # 单元测试（python tests/run_all.py）
 └── scripts/
-    ├── setup-mihomo.sh    # mihomo 代理一键部署
+    ├── init.sh            # 交互式初始化（依赖/代理/配置/授权 7 步）
+    ├── service.sh         # 服务管理（start/stop/restart/status/log）
+    ├── setup-mihomo.sh    # mihomo 代理部署/订阅更新
     ├── check115.py        # 115 授权与链路自检
     ├── make_session.py    # 生成 TG user session
     └── healthcheck.py     # 容器健康检查
