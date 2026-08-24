@@ -709,32 +709,30 @@ def register(app) -> None:
             await message.reply_text("该备份不在运行中")
 
     async def _maybe_ai(message: Message, text: str):
-        """AI 模式入口：配置启用则进 agent 循环；否则静默忽略（保持纯命令行为）。"""
+        """AI 模式入口：配置启用则进 agent 循环；否则静默忽略（保持纯命令行为）。
+
+        展示策略：过程静默（不显示思考/调用了哪些工具），只在最终回复前
+        保持一条"正在处理"指示；工具调用明细仍写入日志可审计。
+        """
         from ai import agent as ai_agent
         if not ai_agent.enabled():
             return
-        status_msg = None
+        busy = await message.reply_text("⏳")
 
-        async def _status(note: str):
-            nonlocal status_msg
+        async def _status(note: str):  # 静默：吞掉过程提示（思考中/调用工具名）
+            return
+
+        try:
+            reply = await ai_agent.chat(message.chat.id,
+                                        message.from_user.id if message.from_user else 0,
+                                        text, on_status=_status)
+        finally:
             try:
-                if status_msg is None:
-                    status_msg = await message.reply_text(note)
-                else:
-                    await status_msg.edit_text(note)
+                await busy.delete()
             except Exception:  # noqa: BLE001
                 pass
-
-        reply = await ai_agent.chat(message.chat.id,
-                                    message.from_user.id if message.from_user else 0,
-                                    text, on_status=_status)
         if reply is None:
             return
-        try:
-            if status_msg is not None:
-                await status_msg.delete()
-        except Exception:  # noqa: BLE001
-            pass
         await message.reply_text(reply[:4000])
 
     @app.on_message(filters.command("ai"))
