@@ -95,9 +95,9 @@ async def main() -> None:
     if user is not None:
         try:
             await user.start()
-            log.info("user session 已启用（可下载 >20MB 视频）")
+            log.info("user session 已启用（下载额度更高，不易触发 FloodWait）")
         except Exception as e:  # noqa: BLE001
-            log.warning("user client 启动失败，退回仅 bot（≤20MB）: %r", e)
+            log.warning("user client 启动失败，退回仅 bot: %r", e)
             state.pyro_user = None
 
     me = await bot.get_me()

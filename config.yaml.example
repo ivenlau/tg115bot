@@ -5,8 +5,9 @@ telegram:
   api_id: 1234567                 # https://my.telegram.org 申请
   api_hash: "your_api_hash"
   bot_token: "123456:ABC-YOURTOKEN"   # @BotFather
-  # 可选：user session 用于下载 >20MB 视频 / 提升额度。留空则只用 bot（≤20MB）。
-  # 生成方式：python scripts/make_session.py
+  # 可选：user session 用于提升下载额度（不易触发 FloodWait）；Premium user 可下 4GB。
+  # 留空则只用 bot，走 MTProto 同样可达 2GB。
+  # 生成方式：python scripts/make_session.py（注意：个人号跑自动化有风控风险）
   user_session: ""                # 形如 config/user.session 或 session 字符串
   allowed_users: []               # TG user_id 白名单；空 [] = 不限制
   # 国内服务器访问 TG 必需（115/OSS 不走代理，国内直连更快）

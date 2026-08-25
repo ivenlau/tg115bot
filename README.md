@@ -86,8 +86,9 @@ sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实�
 # 1. 若需要代理（国内服务器访问 TG），先在宿主机部署 mihomo
 sudo ./scripts/setup-mihomo.sh <订阅地址>
 
-# 2. 配置环境变量
-cp .env.example .env    # 填 telegram 段；代理填 http://host.docker.internal:7890
+# 2. 配置
+cp config.yaml.example config.yaml    # 基础配置；telegram 段可留空，交给 .env 覆盖
+cp .env.example .env                  # 填 telegram 段；代理填 http://host.docker.internal:7890
 
 # 3. 启动
 docker compose up -d --build

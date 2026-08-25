@@ -1,4 +1,4 @@
-"""生成 Pyrogram user session 文件（用于下载 >20MB 视频）。
+"""生成 Pyrogram user session 文件（提升下载额度，不易触发 FloodWait）。
 
 用法：
     python scripts/make_session.py

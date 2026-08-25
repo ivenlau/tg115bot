@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 class _AppState:
     config: Any = None
     pyro_bot: Any = None
-    pyro_user: Any = None          # 可选；存在时用于 >20MB 下载与更高额度
+    pyro_user: Any = None          # 可选；存在时优先用于下载（额度更高，不易 FloodWait）
     cloud: Any = None              # 兼容：主账号 Cloud115Client（/auth 用）
     accounts: Any = None           # AccountManager（多账号轮转）
     workspace: Any = None          # Workspace

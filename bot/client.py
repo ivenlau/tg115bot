@@ -1,7 +1,7 @@
 """构建 Pyrogram 客户端：bot + 可选 user session。
 
-user session 用于下载 >20MB 视频（Bot API 上限 20MB；MTProto bot 也有额度限制），
-额度更高、更不易触发 FloodWait。生成方式见 scripts/make_session.py。
+user session 用于提升下载额度（bot 账号易触发 FloodWait）；Premium user 可下 4GB，
+bot 走 MTProto 也可达 2GB。生成方式见 scripts/make_session.py。
 
 代理（config.telegram.proxy，国内服务器访问 TG 必需）：
   - "socks5://127.0.0.1:7891" / "http://127.0.0.1:7890"；空=直连
@@ -75,7 +75,7 @@ def build_user(cfg: AppConfig) -> Optional[Client]:
         if not p.is_absolute():
             p = (cfg.session_dir.parent / p).resolve() if not p.exists() else p.resolve()
         if not p.exists():
-            log.warning("user session 文件不存在: %s（>20MB 视频将无法下载）", p)
+            log.warning("user session 文件不存在: %s（将退回 bot 下载）", p)
         return Client(
             name=p.stem,
             api_id=cfg.telegram.api_id,
