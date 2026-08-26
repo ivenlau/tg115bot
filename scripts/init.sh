@@ -96,10 +96,12 @@ else
   info ".venv 已创建"
 fi
 
-if .venv/bin/python -c "import pyrogram, aiohttp, aiosqlite, feedparser" 2>/dev/null; then
+# 用 pip --dry-run 校验 requirements（而非硬编码包名探测），requirements 更新后能检测到缺包
+# 注意：dry-run 缺包时退出码仍为 0，需 grep "Would install" 判断（pip 行为，非疏漏）
+if ! .venv/bin/pip install --dry-run -r requirements.txt 2>/dev/null | grep -q "Would install"; then
   info "依赖已就绪"
 else
-  info "安装依赖（首次较慢，含编译 TgCrypto）…"
+  info "安装/补齐依赖（首次较慢，含编译 TgCrypto）…"
   .venv/bin/pip install --upgrade pip wheel >/dev/null 2>&1 || true
   .venv/bin/pip install -r requirements.txt || die "依赖安装失败，检查网络（可能需要代理）"
   info "依赖安装完成"
