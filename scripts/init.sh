@@ -191,6 +191,18 @@ fi
 step "[6/7] 可选功能"
 
 if [[ -f config.yaml ]]; then
+  # 已配置（api_key 与 model 均非空 = AiCfg.enabled 判定，见 config.py）则跳过，
+  # 与其他步骤"已就绪自动跳过"的幂等语义一致
+  if .venv/bin/python -c "
+from config import load_config
+import sys
+try:
+    sys.exit(0 if load_config().ai.enabled else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+    info "AI 助手已配置，跳过"
+  else
   ask_yn "启用 AI 助手模式？（需要 OpenAI 兼容 API key，如 DeepSeek）" "n"
   if [[ "$REPLY" == "y" ]]; then
     ask "API base_url" "https://api.deepseek.com/v1"; AI_BASE="$REPLY"
@@ -227,7 +239,12 @@ PYEOF
       warn "config.yaml 无 ai: 段，请手动配置"
     fi
   fi
+  fi  # 已配置跳过分支闭合
 
+  # Web 台同理：enable: true 则跳过（与 AI 的幂等语义对齐）
+  if grep -q "^web:" config.yaml && grep -A5 "^web:" config.yaml | grep -q "enable: true"; then
+    info "Web 管理台已启用，跳过"
+  else
   ask_yn "启用 Web 管理台？（浏览器查看任务/日志）" "n"
   if [[ "$REPLY" == "y" ]]; then
     sed -i 's|^  enable: false|  enable: true|' config.yaml
@@ -235,6 +252,7 @@ PYEOF
     sed -i "s|^  password: \"changeme\"|  password: \"${REPLY}\"|" config.yaml
     info "Web 台将监听 :8080"
   fi
+  fi  # Web 已启用跳过分支闭合
 fi
 
 # ═══ [7/7] 完成 ═══════════════════════════════════════════════════════

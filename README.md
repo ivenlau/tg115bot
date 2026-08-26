@@ -80,6 +80,26 @@ sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实�
 ./scripts/service.sh restart                 # bot 重连
 ```
 
+### Windows 部署
+
+Windows 版不做代理部署——自行安装 Clash/v2rayN 等系统代理软件，初始化时把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy` 即可。
+
+```powershell
+git clone https://github.com/ivenlau/tg115bot.git; cd tg115bot
+powershell -ExecutionPolicy Bypass -File scripts\init.ps1     # 初始化（6 步，含可选开始菜单快捷方式）
+.\scripts\service.ps1 start                                    # 启动
+```
+
+服务管理与 Linux 版同构（`start / stop / restart / status / log [N]`）：
+
+- 后台隐藏窗口运行，PID 记录在 `run\tg115bot.pid`（校验进程命令行防 PID 复用误杀）
+- 配置写入走内嵌 Python 的 yaml 往返（`api_key` 等同名键不会误伤）
+- 日志同样在 `logs\stdout.log`（运行输出）+ `logs\tg115bot.log`（业务，轮转）
+- 开机自启（可选）：
+  ```powershell
+  schtasks /Create /SC ONSTART /TN tg115bot /TR "powershell -ExecutionPolicy Bypass -File <项目路径>\scripts\service.ps1 start"
+  ```
+
 ### Docker 部署
 
 ```bash
@@ -262,6 +282,9 @@ tg115bot/
     ├── init.sh            # 交互式初始化（依赖/代理/配置/授权 7 步）
     ├── service.sh         # 服务管理（start/stop/restart/status/log）
     ├── setup-mihomo.sh    # mihomo 代理部署/订阅更新
+    ├── init.ps1           # Windows 版初始化（不含代理部署）
+    ├── service.ps1        # Windows 版服务管理
+    ├── menu.ps1           # Windows 快捷管理菜单
     ├── check115.py        # 115 授权与链路自检
     ├── make_session.py    # 生成 TG user session
     └── healthcheck.py     # 容器健康检查
