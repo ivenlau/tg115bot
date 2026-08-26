@@ -267,5 +267,5 @@ echo "    ./scripts/service.sh status   查看状态"
 echo "    ./scripts/service.sh log      跟踪日志"
 echo "    ./scripts/service.sh restart  重启（改配置后）"
 echo
-echo "大文件（>20MB）下载需 user session："
+echo "提升下载额度/防 FloodWait 可配 user session（Premium user 可下 4GB）："
 echo "    .venv/bin/python scripts/make_session.py   然后填 config.yaml 的 user_session"
