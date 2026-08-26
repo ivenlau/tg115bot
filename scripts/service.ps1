@@ -1,4 +1,4 @@
-# service.ps1 — tg115bot Windows 服务管理（后台运行 + PID 文件）
+﻿# service.ps1 — tg115bot Windows 服务管理（后台运行 + PID 文件）
 #
 # 与 Linux 版 service.sh 对应：
 #   .\scripts\service.ps1 start     启动（已在运行则提示）

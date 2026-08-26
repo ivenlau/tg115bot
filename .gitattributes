@@ -1,0 +1,4 @@
+# Windows PowerShell 5.1 只认带 BOM 的 UTF-8（BOM 由文件本身携带）；
+# ps1 固定 CRLF 行尾，防跨平台编辑后行尾漂移
+*.ps1 text eol=crlf
+*.sh   text eol=lf

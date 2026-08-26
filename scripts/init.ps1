@@ -1,4 +1,4 @@
-# init.ps1 — tg115bot Windows 交互式初始化
+﻿# init.ps1 — tg115bot Windows 交互式初始化
 #
 # 与 Linux 版 init.sh 对应，但不含代理部署步骤：
 # Windows 上请自行安装系统代理软件（Clash/v2rayN 等），config.yaml 的

@@ -1,4 +1,4 @@
-# menu.ps1 — tg115bot 快捷管理菜单（init.ps1 创建的开始菜单快捷方式入口）
+﻿# menu.ps1 — tg115bot 快捷管理菜单（init.ps1 创建的开始菜单快捷方式入口）
 #
 # 双击「tg115bot」快捷方式进入；也可直接:
 #   powershell -ExecutionPolicy Bypass -File scripts\menu.ps1
