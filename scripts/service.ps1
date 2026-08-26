@@ -51,13 +51,14 @@ function Get-LivePid {
     if (-not $raw -or -not [int]::TryParse("$raw".Trim(), [ref]$pidVal)) { return $null }
     $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
     if (-not $proc) { return $null }
-    # 校验是本项目的 python（CommandLine 含项目目录下的 main.py）
+    # 校验命令行含本项目路径（PID 记的是 cmd 包装进程，命令行为
+    # cmd /c "<项目>\.venv\...\python.exe main.py >> <项目>\logs\stdout.log 2>&1"，
+    # 含 $Dir 即可判明身份；CIM 不可用时退化为只验进程名 cmd/python）
     $cmd = $null
     try {
         $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $pidVal" -ErrorAction Stop).CommandLine
     } catch {
-        # Get-CimInstance 不可用时退化为只验进程名（Get-Process 拿不到父目录信息）
-        $cmd = if ($proc.ProcessName -match "python") { "$Dir main.py" } else { $null }
+        $cmd = if ($proc.ProcessName -match "cmd|python") { "$Dir main.py" } else { $null }
     }
     if (-not $cmd -or ($cmd -notmatch [regex]::Escape($Dir))) { return $null }
     return $pidVal
@@ -74,31 +75,27 @@ function Do-Start {
         Die "缺少 config.yaml（复制 config.yaml.example 为 config.yaml 后填写，或跑 init.ps1）"
     }
 
-    # 后台启动：stdout/stderr 追加到同一日志
-    # （PowerShell 5.1 的 Start-Process -RedirectStandardError 与 -RedirectStandardOutput
-    #   不能指向同一文件，故先中转 cmd /c 的 2>&1 再追加 —— 与 bash 的 >> log 2>&1 等价）
-    $proc = Start-Process -FilePath $Python -ArgumentList "main.py" `
-        -WorkingDirectory $Dir -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput "$StdoutLog.new" -RedirectStandardError "$StdoutLog.err"
+    # 后台启动，stdout/stderr 追加到同一日志。
+    # 不用 Start-Process -RedirectStandard*：重定向文件句柄由子进程终身持有，
+    # 运行中既删不掉也无法合并——日志会永远滞留在重定向文件里。
+    # 方案：生成一次性 .cmd 批处理（@echo off + 追加重定向），避开
+    # Start-Process -ArgumentList 对嵌套引号的不可控二次包装。
+    # $proc 是 cmd 的 PID，python 是其子进程——stop 时 /T 结束整棵树。
+    $runnerCmd = Join-Path $Dir "run\tg115bot-run.cmd"
+    $redirects = "@echo off`r`n`"$Python`" main.py >> `"$StdoutLog`" 2>&1"
+    [IO.File]::WriteAllText($runnerCmd, $redirects, [Text.Encoding]::Default)
+    $proc = Start-Process -FilePath "$env:ComSpec" -ArgumentList "/c", "`"$runnerCmd`"" `
+        -WorkingDirectory $Dir -WindowStyle Hidden -PassThru
     $procId = $proc.Id
     "$procId" | Set-Content $PidFile
-    # 合并 .err 进主日志后清理中转文件（保留 .new 改名语义：追加进主日志）
     Start-Sleep -Seconds 2
     if ($proc.HasExited) {
-        # 启动即退：把两份中转日志拼出来给用户看
-        $tail = ""
-        foreach ($f in @("$StdoutLog.err", "$StdoutLog.new")) {
-            if (Test-Path $f) { $tail += (Get-Content $f -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n" }
-        }
-        Remove-Item "$StdoutLog.new", "$StdoutLog.err" -ErrorAction SilentlyContinue
         Remove-Item $PidFile -ErrorAction SilentlyContinue
-        Die "启动失败，最近日志：`n$tail"
-    }
-    foreach ($f in @("$StdoutLog.err", "$StdoutLog.new")) {
-        if (Test-Path $f) {
-            Add-Content $StdoutLog (Get-Content $f)
-            Remove-Item $f
+        $tail = ""
+        if (Test-Path $StdoutLog) {
+            $tail = (Get-Content $StdoutLog -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
         }
+        Die "启动失败，最近日志：`n$tail"
     }
     Info "已启动 (PID $procId)"
     Info "日志: .\scripts\service.ps1 log"
@@ -117,10 +114,11 @@ function Do-Stop {
     }
     Info "正在停止 (PID $live) …"
     # Windows 无 SIGTERM。taskkill（不带 /F）只对有窗口的进程发 WM_CLOSE，
-    # 对 -WindowStyle Hidden 的控制台 python 通常直接失败（exit 128）——
-    # 那就跳过 10s 等待立即强杀，避免无谓卡顿。成功了才给优雅退出窗口。
+    # 对 Hidden 窗口的 cmd/python 包装通常直接失败（exit 128）——失败就跳过
+    # 10s 等待立即强杀，避免无谓卡顿。成功了才给优雅退出窗口。
+    # /T 必须带：PID 文件记的是 cmd 包装进程，python 是其子进程。
     $graceful = $false
-    $null = taskkill /PID $live 2>&1
+    $null = taskkill /T /PID $live 2>&1
     if ($LASTEXITCODE -eq 0) {
         $graceful = $true
         $deadline = (Get-Date).AddSeconds(10)
