@@ -27,7 +27,8 @@ router = APIRouter()
 
 
 def _ctx(request: Request, **kw) -> dict:
-    """公共模板上下文。"""
+    """公共模板上下文（TemplateResponse 新签名下 request 由第一参数传入，
+    但仍放进 context，模板里可直接用）。"""
     base = {
         "request": request,
         "active": "",
@@ -52,7 +53,7 @@ async def dashboard(request: Request) -> HTMLResponse:
     for a in active:
         a["elapsed"] = int(now - (a.get("started_at") or now))
         a["pct"] = (a.get("current", 0) * 100 / a["total"]) if a.get("total") else 0
-    return templates.TemplateResponse("dashboard.html", _ctx(
+    return templates.TemplateResponse(request, "dashboard.html", _ctx(
         request, active="dashboard", active_tasks=active, stats=stats,
         accounts=acct_status, free_gb=(tg.workspace.free_bytes() / 1024**3) if tg.workspace else 0,
         min_free_gb=tg.config.storage.min_free_gb if tg.config else 0,
@@ -72,8 +73,8 @@ async def dashboard_partial(request: Request) -> HTMLResponse:
     for a in active:
         a["elapsed"] = int(now - (a.get("started_at") or now))
         a["pct"] = (a.get("current", 0) * 100 / a["total"]) if a.get("total") else 0
-    return templates.TemplateResponse("_dashboard.html", {
-        "request": request, "active_tasks": active, "stats": stats,
+    return templates.TemplateResponse(request, "_dashboard.html", {
+        "active_tasks": active, "stats": stats,
         "accounts": acct_status, "qsize": tg.queue.qsize() if tg.queue else 0,
         "free_gb": (tg.workspace.free_bytes() / 1024**3) if tg.workspace else 0,
         "min_free_gb": tg.config.storage.min_free_gb if tg.config else 0,
@@ -85,7 +86,7 @@ async def dashboard_partial(request: Request) -> HTMLResponse:
 async def tasks(request: Request) -> HTMLResponse:
     db = request.app.state.db
     rows = await db.recent_tasks(100) if db else []
-    return templates.TemplateResponse("tasks.html", _ctx(request, active="tasks", tasks=rows))
+    return templates.TemplateResponse(request, "tasks.html", _ctx(request, active="tasks", tasks=rows))
 
 
 # ── 账号 ──────────────────────────────────────────────────────────────────
@@ -99,7 +100,7 @@ async def accounts(request: Request) -> HTMLResponse:
         row = db_rows.get(a["name"])
         a["last_error"] = row.last_error if row else ""
         a["last_used_at"] = row.last_used_at if row else 0
-    return templates.TemplateResponse("accounts.html", _ctx(request, active="accounts", accounts=runtime))
+    return templates.TemplateResponse(request, "accounts.html", _ctx(request, active="accounts", accounts=runtime))
 
 
 # ── 频道规则 ──────────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ async def accounts(request: Request) -> HTMLResponse:
 async def channels(request: Request) -> HTMLResponse:
     db = request.app.state.db
     rules = await db.list_rules() if db else []
-    return templates.TemplateResponse("channels.html", _ctx(request, active="channels", rules=rules))
+    return templates.TemplateResponse(request, "channels.html", _ctx(request, active="channels", rules=rules))
 
 
 @router.post("/channels", response_class=HTMLResponse)
@@ -129,7 +130,7 @@ async def channels_add(
         if tg.monitor is not None:
             await tg.monitor.reload()
     rules = await db.list_rules() if db else []
-    return templates.TemplateResponse("_channels_list.html", {"request": request, "rules": rules})
+    return templates.TemplateResponse(request, "_channels_list.html", {"rules": rules})
 
 
 @router.post("/channels/{rule_id}/delete", response_class=HTMLResponse)
@@ -141,7 +142,7 @@ async def channels_delete(request: Request, rule_id: int) -> HTMLResponse:
         if tg.monitor is not None:
             await tg.monitor.reload()
     rules = await db.list_rules() if db else []
-    return templates.TemplateResponse("_channels_list.html", {"request": request, "rules": rules})
+    return templates.TemplateResponse(request, "_channels_list.html", {"rules": rules})
 
 
 # ── 日志 ──────────────────────────────────────────────────────────────────
@@ -149,6 +150,6 @@ async def channels_delete(request: Request, rule_id: int) -> HTMLResponse:
 async def logs(request: Request, level: str = "") -> HTMLResponse:
     db = request.app.state.db
     rows = await db.recent_logs(300, level=level or None) if db else []
-    return templates.TemplateResponse("logs.html", _ctx(
+    return templates.TemplateResponse(request, "logs.html", _ctx(
         request, active="logs", logs=rows, level=level,
     ))
