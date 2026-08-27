@@ -146,7 +146,7 @@ if (Test-Path config.yaml) {
     }
 
     # 配置写入交给内嵌 Python（yaml 往返，键名精确）：
-    # PowerShell 的 -replace 会把 movie_sub.api_key 等同名键一起误伤，bash 版用
+    # PowerShell 的 -replace 会把其他段的同名键（如 api_key）一起误伤，bash 版用
     # sed 也有同样问题所以专门写了逐行状态机——这里直接复用该思路走 yaml 安全路径。
     $cfgPy = @'
 import json, sys
@@ -206,7 +206,7 @@ if (Test-Path config.yaml) {
         $aiBase  = Ask "API base_url" "https://api.deepseek.com/v1"
         $aiKey   = Ask "api_key"
         $aiModel = Ask "model" "deepseek-chat"
-        # 同样走 yaml 安全路径，只动 ai: 段，不碰 movie_sub.api_key 同名键
+        # 同样走 yaml 安全路径，只动 ai: 段，不碰其他段同名键
         $aiPy = @'
 import json, sys
 from pathlib import Path

@@ -208,7 +208,7 @@ except Exception:
     ask "API base_url" "https://api.deepseek.com/v1"; AI_BASE="$REPLY"
     ask "api_key"; AI_KEY="$REPLY"
     ask "model" "deepseek-chat"; AI_MODEL="$REPLY"
-    # ai: 段存在才改（避免误伤 movie_sub 的 api_key）
+    # ai: 段存在才改（避免误伤其他段的同名键）
     if grep -q "^ai:" config.yaml; then
       .venv/bin/python - "$AI_BASE" "$AI_KEY" "$AI_MODEL" <<'PYEOF'
 import sys

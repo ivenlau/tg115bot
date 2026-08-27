@@ -35,8 +35,6 @@ HELP = (
     "/offlines — 查看离线任务队列\n"
     "/addrss `<RSS地址> [目录] [关键词...]` — 订阅 RSS 自动离线\n"
     "/rsss — 查看订阅 / `/delrss <ID>` — 退订\n"
-    "/sub `<片名>` — 订阅电影（资源发布自动离线，需 nullbr API）\n"
-    "/subs — 订阅列表 / `/unsub <ID>` — 取消订阅\n"
     "/status — 115 空间/离线配额/风控余量/账号/队列一览\n"
     "/ls `<115路径>` — 列目录　`/search <关键词>` — 全盘搜索\n"
     "/rm `<路径>` — 删除（二次确认）　`/mv <源路径> <目的目录>` — 移动\n"
@@ -357,72 +355,6 @@ def register(app) -> None:
             return
         await state.db.delete_feed(int(parts[1]))
         await message.reply_text(f"✅ 已退订 {parts[1]}")
-
-    @app.on_message(filters.command("sub"))
-    async def _sub(_, message: Message):
-        if not _authorized(message):
-            return
-        if state.db is None:
-            await message.reply_text("⚠️ 持久化未启用")
-            return
-        cfg = get_config()
-        if not (cfg.movie_sub.app_id and cfg.movie_sub.api_key):
-            await message.reply_text(
-                "⚠️ 未配置 nullbr API 授权（config.yaml 的 movie_sub.app_id/api_key），\n"
-                "申请: https://nullbr.online/api"
-            )
-            return
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) < 2:
-            await message.reply_text("用法: /sub 流浪地球")
-            return
-        movie_name = parts[1].strip()
-        notice = await with_flood_wait(lambda: message.reply_text(f"🔍 TMDB 搜索: {movie_name} …"))
-        from core.movie_sub import tmdb_search_id
-        tmdb_id = await tmdb_search_id(movie_name)
-        if not tmdb_id:
-            await message.reply_text(f"❌ TMDB 未找到: {movie_name}（换个名字/英文名试试）")
-            return
-        save_path = cfg.movie_sub.target_dir
-        sub = await state.db.add_movie_sub(tmdb_id, movie_name, save_path, message.chat.id)
-        if sub is None:
-            await message.reply_text(f"⚠️ 已订阅过该电影（TMDB {tmdb_id}）")
-            return
-        await message.reply_text(
-            f"✅ 已订阅《{movie_name}》\nTMDB: {tmdb_id}\n📁 {save_path}\n"
-            f"每 4 小时检查一次，资源发布自动离线下载"
-        )
-
-    @app.on_message(filters.command("subs"))
-    async def _subs(_, message: Message):
-        if not _authorized(message):
-            return
-        if state.db is None:
-            await message.reply_text("⚠️ 持久化未启用")
-            return
-        subs = await state.db.list_movie_subs()
-        if not subs:
-            await message.reply_text("暂无电影订阅。用法: /sub <片名>")
-            return
-        lines = ["**电影订阅**"]
-        for sub in subs:
-            mark = "✅已下载" if sub.downloaded else "⏳等资源"
-            lines.append(f"`{sub.id}` {sub.movie_name} [{mark}]")
-        await message.reply_text("\n".join(lines))
-
-    @app.on_message(filters.command("unsub"))
-    async def _unsub(_, message: Message):
-        if not _authorized(message):
-            return
-        if state.db is None:
-            await message.reply_text("⚠️ 持久化未启用")
-            return
-        parts = (message.text or "").split()
-        if len(parts) < 2 or not parts[1].isdigit():
-            await message.reply_text("用法: /unsub <订阅ID>")
-            return
-        await state.db.delete_movie_sub(int(parts[1]))
-        await message.reply_text(f"✅ 已取消订阅 {parts[1]}")
 
     @app.on_message(filters.command("status"))
     async def _status(_, message: Message):
@@ -880,7 +812,7 @@ def register(app) -> None:
     @app.on_message(filters.text & ~filters.command(
         ["start", "help", "setdir", "auth", "cancel", "channels",
          "addchannel", "delchannel", "offline", "offlines",
-         "addrss", "rsss", "delrss", "sub", "subs", "unsub",
+         "addrss", "rsss", "delrss",
          "status", "ls", "search", "rm", "mv", "yes",
          "backup", "backups", "backupstop", "dl", "ai", "aireset",
          "aitools"]))

@@ -48,6 +48,9 @@ class AccountCfg(BaseModel):
 class StorageCfg(BaseModel):
     work_dir: str = "downloads"
     min_free_gb: int = 5
+    # 保留本地副本：true 时上传成功后不删临时文件，改存为 downloads/copies/<原文件名>
+    # 注意：临时名含 uuid 后缀，副本会去掉后缀还原为原文件名
+    keep_local: bool = False
 
 
 class Rate115Cfg(BaseModel):
@@ -94,14 +97,6 @@ class ShareCfg(BaseModel):
     target_dir: str = "/tg115bot/shared"   # 转存默认目录
 
 
-class MovieSubCfg(BaseModel):
-    # nullbr API 授权（https://nullbr.online/api 申请）；留空则电影订阅功能停用
-    app_id: str = ""
-    api_key: str = ""
-    target_dir: str = "/tg115bot/movies"   # 电影订阅默认保存目录
-    zh_sub_only: bool = False              # true 时只选带中字的资源
-
-
 class AiCfg(BaseModel):
     # AI 助手模式（可选）。OpenAI 兼容协议（DeepSeek/Qwen/OpenAI/Ollama/one-api 网关皆可）。
     # api_key 与 model 均非空才启用；留空则功能完全不加载，行为与纯命令模式一致。
@@ -136,7 +131,6 @@ class AppConfig(BaseModel):
     channel_monitor: ChannelMonitorCfg = Field(default_factory=ChannelMonitorCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
     security: SecurityCfg = Field(default_factory=SecurityCfg)
-    movie_sub: MovieSubCfg = Field(default_factory=MovieSubCfg)
     share: ShareCfg = Field(default_factory=ShareCfg)
     ai: AiCfg = Field(default_factory=AiCfg)
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 from core.app import state
 from core.downloader import download
@@ -60,6 +61,7 @@ async def run_task(task: Task) -> None:
 
     ws = state.workspace
     cfg = state.config
+    ws.delete_after_upload = cfg.upload.delete_after_upload
     reporter = ProgressReporter(
         state.pyro_bot, task.tracking_chat_id, task.tracking_message_id,
         task_id=task.task_id, filename=task.filename, source=task.source,
@@ -78,6 +80,7 @@ async def run_task(task: Task) -> None:
 
     await _persist(task, STATUS_QUEUED)
     acct_name_used = None
+    succeeded = False
 
     try:
         # 提前校验 115 账号可用性，避免下完才发现无法上传
@@ -134,10 +137,12 @@ async def run_task(task: Task) -> None:
             state.accounts.report_success(acct_name_used)
 
         await _update(task, status=STATUS_DONE, method=result.method)
+        succeeded = True
         await reporter.final_text(
             f"✅ 完成\n📄 {task.filename}\n📦 {human_bytes(written)}\n"
             f"📁 {task.target_dir}\n⚡ {result.method}"
             + (f"\n👤 {acct_name_used}" if acct_name_used else "")
+            + (f"\n💾 本地副本: {ws.root / 'copies'}" if ws.keep_local else "")
         )
     except TaskCancelled:
         log.info("任务已取消: %s", task.filename)
@@ -149,5 +154,13 @@ async def run_task(task: Task) -> None:
         await reporter.final_text(f"❌ 失败: {task.filename}\n原因: {e}")
     finally:
         state.unregister_task(task)
-        if cfg.upload.delete_after_upload:
-            ws.cleanup(tmp)
+        _finalize_local(ws, tmp, task.filename, succeeded)
+
+
+def _finalize_local(ws, tmp: Path, filename: str, succeeded: bool) -> None:
+    """收尾本地临时文件：成功且开副本保留 -> 存副本；否则按配置删除。"""
+    if succeeded and ws.keep_local:
+        if ws.keep_copy(tmp, filename) is not None:
+            return
+    if ws.delete_after_upload:
+        ws.cleanup(tmp)

@@ -14,7 +14,7 @@ from typing import Any, List, Optional
 import aiosqlite
 
 from persistence.models import (
-    AccountRow, BackupRow, ChannelRuleRow, LogRow, MovieSubRow,
+    AccountRow, BackupRow, ChannelRuleRow, LogRow,
     OfflineTaskRow, RssFeedRow, TaskRow, STATUS_QUEUED,
 )
 
@@ -101,18 +101,6 @@ CREATE TABLE IF NOT EXISTS rss_seen (
     created_at  REAL
 );
 
-CREATE TABLE IF NOT EXISTS movie_subs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    tmdb_id     TEXT NOT NULL,
-    movie_name  TEXT,
-    save_path   TEXT,
-    downloaded  INTEGER DEFAULT 0,
-    download_url TEXT,
-    chat_id     INTEGER,
-    created_at  REAL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_movie_tmdb ON movie_subs(tmdb_id);
-
 CREATE TABLE IF NOT EXISTS channel_backups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id  INTEGER NOT NULL,
@@ -170,6 +158,8 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(str(self.path))
         self._db.row_factory = aiosqlite.Row
+        # 电影订阅功能已下线：清掉旧库残留表（新库无此表，DROP IF EXISTS 无副作用）
+        await self._db.execute("DROP TABLE IF EXISTS movie_subs")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
         log.info("数据库就绪: %s", self.path)
@@ -407,55 +397,6 @@ class Database:
         )
         await self.conn.commit()
 
-    # ── 电影订阅 ─────────────────────────────────────────────────────────
-    async def list_movie_subs(self, only_pending: bool = False) -> List[MovieSubRow]:
-        sql = "SELECT * FROM movie_subs" + (" WHERE downloaded=0" if only_pending else "") + " ORDER BY id"
-        async with self.conn.execute(sql) as cur:
-            rows = await cur.fetchall()
-        return [_movie_row(r) for r in rows]
-
-    async def get_movie_sub_by_tmdb(self, tmdb_id: str) -> Optional[MovieSubRow]:
-        async with self.conn.execute(
-            "SELECT * FROM movie_subs WHERE tmdb_id=?", (tmdb_id,)
-        ) as cur:
-            r = await cur.fetchone()
-        return _movie_row(r) if r else None
-
-    async def add_movie_sub(self, tmdb_id: str, movie_name: str, save_path: str,
-                            chat_id: int) -> Optional[MovieSubRow]:
-        async with self.conn.execute(
-            "SELECT id FROM movie_subs WHERE tmdb_id=?", (tmdb_id,)
-        ) as cur:
-            if await cur.fetchone():
-                return None
-        cur = await self.conn.execute(
-            """INSERT INTO movie_subs(tmdb_id,movie_name,save_path,downloaded,chat_id,created_at)
-               VALUES(?,?,?,0,?,?)""",
-            (tmdb_id, movie_name, save_path, chat_id, time.time()),
-        )
-        await self.conn.commit()
-        async with self.conn.execute(
-            "SELECT * FROM movie_subs WHERE tmdb_id=?", (tmdb_id,)
-        ) as cur:
-            r = await cur.fetchone()
-        return _movie_row(r) if r else None
-
-    async def update_movie_sub(self, sub_id: int, **kw) -> None:
-        allowed = ("downloaded", "download_url")
-        sets, params = [], []
-        for k, v in kw.items():
-            if k in allowed:
-                sets.append(f"{k}=?"); params.append(1 if v is True else 0 if v is False else v)
-        if not sets:
-            return
-        params.append(sub_id)
-        await self.conn.execute(f"UPDATE movie_subs SET {', '.join(sets)} WHERE id=?", params)
-        await self.conn.commit()
-
-    async def delete_movie_sub(self, sub_id: int) -> None:
-        await self.conn.execute("DELETE FROM movie_subs WHERE id=?", (sub_id,))
-        await self.conn.commit()
-
     # ── 频道备份 ─────────────────────────────────────────────────────────
     async def get_backup_by_channel(self, channel_id: int) -> Optional[BackupRow]:
         async with self.conn.execute(
@@ -610,15 +551,6 @@ def _backup_row(r: aiosqlite.Row) -> BackupRow:
         last_message_id=r["last_message_id"] or 0, total_done=r["total_done"] or 0,
         skipped=r["skipped"] or 0, chat_id=r["chat_id"] or 0,
         created_at=r["created_at"] or 0.0, updated_at=r["updated_at"] or 0.0,
-    )
-
-
-def _movie_row(r: aiosqlite.Row) -> MovieSubRow:
-    return MovieSubRow(
-        id=r["id"], tmdb_id=r["tmdb_id"] or "", movie_name=r["movie_name"] or "",
-        save_path=r["save_path"] or "", downloaded=bool(r["downloaded"]),
-        download_url=r["download_url"] or "", chat_id=r["chat_id"] or 0,
-        created_at=r["created_at"] or 0.0,
     )
 
 

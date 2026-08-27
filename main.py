@@ -16,7 +16,6 @@ from core.pipeline import run_task
 from core.app import state
 from core.offline import offline_watcher
 from core.rss import rss_watcher
-from core.movie_sub import movie_watcher
 from bot.client import build_bot, build_user
 from bot.handlers import register
 from bot.channel_monitor import ChannelMonitor
@@ -59,7 +58,6 @@ async def main() -> None:
         )
     offline_task = asyncio.create_task(offline_watcher(), name="tg115bot-offline")
     rss_task = asyncio.create_task(rss_watcher(), name="tg115bot-rss")
-    movie_task = asyncio.create_task(movie_watcher(), name="tg115bot-movie")
 
     # ── 115 多账号 ────────────────────────────────────────────────────────
     accounts = AccountManager(cfg.accounts, cfg.session_dir, cfg.rate115.min_interval_sec, db)
@@ -72,7 +70,8 @@ async def main() -> None:
         state.cloud = accounts.primary  # 兼容：/auth 等可直接用主账号
 
     # ── 工作区 + 队列 ────────────────────────────────────────────────────
-    state.workspace = Workspace(cfg.work_dir_abs, cfg.storage.min_free_gb)
+    state.workspace = Workspace(cfg.work_dir_abs, cfg.storage.min_free_gb,
+                                keep_local=cfg.storage.keep_local)
     state.queue = TaskQueue(concurrency=cfg.queue.concurrency, runner=run_task)
     await state.queue.start()
 
@@ -132,8 +131,6 @@ async def main() -> None:
         await asyncio.gather(offline_task, return_exceptions=True)
         rss_task.cancel()
         await asyncio.gather(rss_task, return_exceptions=True)
-        movie_task.cancel()
-        await asyncio.gather(movie_task, return_exceptions=True)
         await state.queue.stop()
         if state.pyro_user is not None:
             await state.pyro_user.stop()

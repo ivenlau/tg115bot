@@ -1,4 +1,4 @@
-"""本地临时工作区：唯一临时路径、预分配、磁盘水位、清理。"""
+"""本地临时工作区：唯一临时路径、预分配、磁盘水位、清理、副本保留。"""
 from __future__ import annotations
 
 import logging
@@ -6,6 +6,7 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -14,14 +15,41 @@ _ILLEGAL = set('\\/:*?"<>|') | {"'", chr(0), chr(9), chr(10), chr(13)}
 
 
 class Workspace:
-    def __init__(self, work_dir: Path, min_free_gb: int):
+    def __init__(self, work_dir: Path, min_free_gb: int, keep_local: bool = False):
         self.root = Path(work_dir)
         self.min_free_bytes = min_free_gb * 1024 ** 3
+        self.keep_local = keep_local
+        self.delete_after_upload = True     # 由 pipeline 依据 upload 配置回填
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, name: str) -> Path:
         safe = "".join("_" if c in _ILLEGAL else c for c in (name or "download")).strip("._") or "download"
         return self.root / f"{safe}.{uuid.uuid4().hex[:8]}.part"
+
+    def keep_copy(self, tmp: Path, final_name: str) -> Optional[Path]:
+        """把上传完成的临时文件转存为副本（去掉 uuid 后缀，还原原名）。
+
+        存到 <work_dir>/copies/；同名冲突加 (1)/(2) 序号；失败返回 None
+        （调用方负责清理原临时文件，行为与未开启开关时一致）。
+        """
+        try:
+            copies = self.root / "copies"
+            copies.mkdir(parents=True, exist_ok=True)
+            safe = "".join("_" if c in _ILLEGAL else c for c in (final_name or tmp.name)).strip("._")
+            dst = copies / (safe or tmp.name)
+            if dst.exists():
+                stem, suffix = dst.stem, dst.suffix
+                for i in range(1, 10000):
+                    cand = copies / f"{stem} ({i}){suffix}"
+                    if not cand.exists():
+                        dst = cand
+                        break
+            shutil.move(str(tmp), dst)
+            log.info("已保留本地副本: %s", dst)
+            return dst
+        except OSError as e:
+            log.warning("保留副本失败 %s: %r", tmp, e)
+            return None
 
     @staticmethod
     def preallocate(path: Path, size: int) -> None:

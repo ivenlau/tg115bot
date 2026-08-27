@@ -290,48 +290,6 @@ async def _rss_del(a):
     return f"✅ 已退订 {a['feed_id']}"
 
 
-@tool("movie_sub_add", "订阅电影（TMDB 匹配），资源发布自动离线（需 nullbr API 已配置）。",
-      schema({"movie_name": _s("电影名（中文或英文）"),
-              "save_dir": _s("保存目录（可选，默认 movie_sub.target_dir）")}, ["movie_name"]))
-async def _movie_sub_add(a):
-    if state.db is None:
-        return "持久化未启用"
-    from config import get_config
-    from core.movie_sub import tmdb_search_id
-    cfg = get_config()
-    if not (cfg.movie_sub.app_id and cfg.movie_sub.api_key):
-        return "❌ 未配置 nullbr API（movie_sub.app_id/api_key）"
-    name = a["movie_name"]
-    tmdb_id = await tmdb_search_id(name)
-    if not tmdb_id:
-        return f"❌ TMDB 未找到《{name}》，建议换个名称重试"
-    sub = await state.db.add_movie_sub(tmdb_id, name,
-                                       a.get("save_dir") or cfg.movie_sub.target_dir,
-                                       state.ai_current_chat or 0)
-    if sub is None:
-        return f"《{name}》已订阅过"
-    return f"✅ 已订阅《{name}》(TMDB {tmdb_id})，每 4 小时检查资源"
-
-
-@tool("movie_sub_list", "查看电影订阅列表。无参数。", schema({}))
-async def _movie_sub_list(a):
-    if state.db is None:
-        return "持久化未启用"
-    subs = await state.db.list_movie_subs()
-    if not subs:
-        return "暂无电影订阅"
-    return "\n".join(
-        f"#{s.id} {s.movie_name} [{'已下载' if s.downloaded else '等资源'}]" for s in subs)
-
-
-@tool("movie_sub_del", "取消电影订阅。", schema({"sub_id": {"type": "integer", "description": "订阅 ID"}}, ["sub_id"]))
-async def _movie_sub_del(a):
-    if state.db is None:
-        return "持久化未启用"
-    await state.db.delete_movie_sub(int(a["sub_id"]))
-    return f"✅ 已取消订阅 {a['sub_id']}"
-
-
 # ══════════════════════════════ 频道 ══════════════════════════════
 @tool("channel_rule_add", "添加频道监控规则：该频道新消息命中关键词自动上传 115。",
       schema({"channel_id": _s("频道 ID（如 -1001234567890）"),

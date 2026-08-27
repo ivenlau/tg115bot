@@ -87,10 +87,13 @@ async def run_direct_task(task: Task, tmp: Path) -> None:
     from core.uploader import upload_to_dir
 
     cfg = state.config
+    ws = state.workspace
+    ws.delete_after_upload = cfg.upload.delete_after_upload
     reporter = ProgressReporter(
         state.pyro_bot, task.tracking_chat_id, task.tracking_message_id,
         task_id=task.task_id, filename=task.filename, source="direct",
     )
+    succeeded = False
     try:
         await reporter.set_stage("🌐 直链下载中")
         size, sha1 = await direct_download(
@@ -104,9 +107,11 @@ async def run_direct_task(task: Task, tmp: Path) -> None:
             oss_concurrency=cfg.upload.oss_concurrency,
             on_progress=reporter.on_progress, cancel_event=task.cancel_event,
         )
+        succeeded = True
         await reporter.final_text(
             f"✅ 完成\n📄 {task.filename}\n📦 {human_bytes(size)}\n"
             f"📁 {task.target_dir}\n⚡ {result.method}"
+            + (f"\n💾 本地副本: {ws.root / 'copies'}" if ws.keep_local else "")
         )
     except TaskCancelled:
         await reporter.final_text(f"🚫 已取消\n📄 {task.filename}")
@@ -114,5 +119,8 @@ async def run_direct_task(task: Task, tmp: Path) -> None:
         log.exception("直链任务失败: %s", task.filename)
         await reporter.final_text(f"❌ 失败: {task.filename}\n原因: {e}")
     finally:
-        if cfg.upload.delete_after_upload:
-            state.workspace.cleanup(tmp)
+        if succeeded and ws.keep_local:
+            if ws.keep_copy(tmp, task.filename) is not None:
+                return
+        if ws.delete_after_upload:
+            ws.cleanup(tmp)

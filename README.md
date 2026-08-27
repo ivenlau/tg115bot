@@ -160,8 +160,6 @@ python main.py
 | `/offlines` | 查看离线任务队列 |
 | `/addrss <RSS地址> [目录] [关键词...]` | 订阅 RSS 自动离线（关键词=标题白名单，空=全部） |
 | `/rsss` / `/delrss <ID>` | 查看 / 退订 RSS |
-| `/sub <片名>` | 订阅电影，资源发布自动离线（需 nullbr API） |
-| `/subs` / `/unsub <ID>` | 查看 / 取消电影订阅 |
 | `/status` | 115 空间 / 离线配额 / 风控余量 / 账号 / 队列一览 |
 | `/ls <路径>` | 列 115 目录 |
 | `/search <关键词>` | 115 全盘搜索 |
@@ -206,7 +204,7 @@ ai:
 
 配置后普通文本消息即进入 AI 对话（命令与链接识别不受影响），例如：
 
-- “帮我把流浪地球2存到网盘，要 4K” → 自动订阅追更
+- “把网盘里的电影挪到 /media，只要 4K” → `search_115` + `move_115`
 - “网盘还有多少空间？离线配额呢？” → 调 `full_status` 汇报
 - “订阅这个 RSS，只要 1080p 以上” → `rss_add` + 关键词
 
@@ -233,13 +231,6 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 每 10 分钟检查一次全部订阅源；条目标题命中关键词（留空=全部）且含可下载链接
 （magnet/ed2k/种子及媒体直链）时自动离线，重复条目自动去重。RSS 源经 `telegram.proxy` 抓取。
 
-### 电影订阅（可选，需 nullbr API）
-
-1. 到 https://nullbr.online/api 申请 API 授权；
-2. `config.yaml` 填 `movie_sub.app_id` / `api_key`，重启；
-3. `/sub 流浪地球` —— TMDB 匹配后入订阅表，每 4 小时检查资源，
-   发布即自动离线（优先 ed2k，分辨率 2160p>1080p>720p，中字加分）。
-
 ## 配置项
 
 完整说明见 `config.yaml.example` 内注释。常用：
@@ -255,8 +246,6 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 | `organize.rename_template` | `{filename}` | 重命名模板（`{date}/{name}/{ext}` 等） |
 | `organize.classify_by_ext` | false | 按扩展名归入子目录 |
 | `channel_monitor.enabled` | false | 频道监控开关 |
-| `movie_sub.app_id/api_key` | 空 | nullbr API 授权（电影订阅，空=停用） |
-| `movie_sub.target_dir` | `/tg115bot/movies` | 电影订阅保存目录 |
 | `share.cookies` | 空 | 分享转存凭据（浏览器 Cookie；空=停用转存） |
 | `ai.base_url/api_key/model` | 空 | AI 助手（OpenAI 兼容；空=停用） |
 | `web.enable` | false | Web 管理台开关 |

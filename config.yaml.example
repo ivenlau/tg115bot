@@ -35,6 +35,7 @@ accounts:
 storage:
   work_dir: "downloads"           # 临时下载目录
   min_free_gb: 5                  # 可用空间下限（GB），低于则暂停接新任务
+  keep_local: false               # true 时上传成功后保留本地副本到 <work_dir>/copies/（不删临时文件）
 
 # 115 风控退避
 115_rate:
@@ -71,14 +72,6 @@ logging:
 
 security:
   secret_key: ""                   # 留空则读环境变量 TG115BOT_SECRET_KEY；仍空用开发态默认（仅本机）
-
-# ── 电影订阅（可选；需 nullbr API 授权）────────────────────────────────────
-# 申请: https://nullbr.online/api
-movie_sub:
-  app_id: ""
-  api_key: ""
-  target_dir: "/tg115bot/movies"
-  zh_sub_only: false             # true 时只选带中字的资源
 
 # ── 分享链接转存（可选）─────────────────────────────────────────────────────
 # 转存接口仅 webapi 支持（Cookie 鉴权），开放平台无此端点。
