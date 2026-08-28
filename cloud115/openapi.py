@@ -325,11 +325,16 @@ class Open115Client:
             await asyncio.sleep(delay)
         raise RuntimeError(f"建目录后取不到 cid: {path}")
 
-    async def list_files(self, cid: int = 0, limit: int = 32) -> Dict[str, Any]:
-        """列目录。返回 {list: [...]}；open 接口的 data 可能直接是数组或 {list: [...]}。"""
+    async def list_files(self, cid: int = 0, limit: int = 32, offset: int = 0) -> Dict[str, Any]:
+        """列目录（直接子项：目录+文件）。返回 {list: [...], count?: N}。
+
+        ⚠️ show_dir=1 必带（与 search_files 一致）：实测（2026-08）缺省时不返回
+        目录、且列表呈「递归文件」形态——子目录里的文件会混入父级列表。
+        data 可能直接是数组或 {list: [...]}（两种形态都出现过）。
+        """
         resp = await self._request(
             "GET", f"{BASE_API}/open/ufile/files",
-            params={"cid": cid, "limit": limit, "offset": 0},
+            params={"cid": cid, "limit": limit, "offset": offset, "show_dir": 1},
         )
         if not self._ok(resp):
             return {"list": [], "error": str(resp)[:200]}
@@ -339,6 +344,24 @@ class Open115Client:
         if isinstance(data, dict) and isinstance(data.get("list"), list):
             return data
         return {"list": []}
+
+    async def list_files_all(self, cid: int = 0, limit: int = 100,
+                             max_items: int = 5000) -> list:
+        """翻页取目录全部条目。终止条件（任一）：批 < limit / 累计 >= count / max_items 兜底
+        （防 API 忽略 offset 时死循环）。页间不额外 sleep——_request 内已有 RateLimiter。"""
+        items: list = []
+        offset = 0
+        while len(items) < max_items:
+            data = await self.list_files(cid, limit, offset)
+            batch = data.get("list") or []
+            if not batch:
+                break
+            items.extend(batch)
+            count = int(data.get("count") or 0)
+            if len(batch) < limit or (count and len(items) >= count):
+                break
+            offset += len(batch)
+        return items[:max_items]
 
     # ── 上传 ─────────────────────────────────────────────────────────────
     async def upload_init(self, file_name: str, file_size: int, sha1: str, cid: int,
@@ -473,16 +496,54 @@ class Open115Client:
             return True
         raise RuntimeError(f"移动失败: {str(resp)[:200]}")
 
+    async def rename_file(self, file_id, new_name: str) -> bool:
+        """重命名文件/目录。POST /open/ufile/update（file_id + file_name）。"""
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/ufile/update",
+            data={"file_id": file_id, "file_name": new_name},
+        )
+        if self._ok(resp):
+            # 路径缓存里旧名/新名都可能已脏，全清最稳
+            self.invalidate_path_cache()
+            return True
+        raise RuntimeError(f"重命名失败: {str(resp)[:200]}")
+
+    async def get_download_url(self, pick_code: str) -> Dict[str, Any]:
+        """取文件下载直链。POST /open/ufile/downurl（form: pick_code）。
+
+        响应 data 是单条目 map，值含 file_name/file_size/pick_code/sha1/url
+        （url 可能是 {"url": ...} 或纯字符串，由 cloud115.download.parse_downurl 归一）。
+        ⚠️ 实测（2026-08）map 的 key 并不总是 pick_code（可能是内部 file_id），
+        故按「含 url 的 dict 值」取条目，不按 key 匹配。
+        """
+        resp = await self._request(
+            "POST", f"{BASE_API}/open/ufile/downurl", data={"pick_code": pick_code},
+        )
+        if not self._ok(resp):
+            raise RuntimeError(f"获取下载地址失败: {str(resp)[:200]}")
+        data = resp.get("data")
+        if isinstance(data, dict):
+            if data.get("url"):                   # 容错：无外层 key 的形态
+                return data
+            for v in data.values():               # 实测形态：{<内部id>: {…url…}}
+                if isinstance(v, dict) and v.get("url"):
+                    return v
+        raise RuntimeError(f"downurl 响应缺条目 {pick_code}: {str(resp)[:200]}")
+
     async def user_space(self) -> Dict[str, Any]:
-        """空间用量：{space, used_size, size_total}（字节）。"""
+        """空间用量：{used, total}（字节）。"""
         resp = await self._request("GET", f"{BASE_API}/open/user/info")
         if not self._ok(resp):
             return {}
         data = resp.get("data") or {}
-        # 字段名各版本差异，多候选容错
+        # 字段名各版本差异，多候选容错：老形态 used_size/size_total；
+        # 新形态 rt_space_info.{all_use,all_total}.size（2026-08 实测）
+        rt = data.get("rt_space_info") or {}
         return {
-            "used": data.get("used_size") or data.get("space_used") or 0,
-            "total": data.get("size_total") or data.get("space_total") or 0,
+            "used": data.get("used_size") or data.get("space_used")
+                or (rt.get("all_use") or {}).get("size") or 0,
+            "total": data.get("size_total") or data.get("space_total")
+                or (rt.get("all_total") or {}).get("size") or 0,
         }
 
     # ── 探活 ─────────────────────────────────────────────────────────────

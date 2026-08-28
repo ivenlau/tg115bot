@@ -20,6 +20,7 @@ MODULES = [
     "tests.test_floodwait",
     "tests.test_db",
     "tests.test_oss_protocol",
+    "tests.test_manual_tools",
 ]
 
 

@@ -170,6 +170,27 @@ python main.py
 | `/dl <http直链>` | 本地中转下载后上传 |
 | `/ai` `/aireset` `/aitools` | AI 模式开关 / 清空记忆 / 管理动态工具 |
 
+### 命令行手动运维（scripts/manual.py）
+
+不依赖 Telegram，直接在服务器/本机操作 115：**无参数运行进交互菜单**，带子命令则一次性执行（可 cron/脚本编排）。未授权先跑 `python scripts/check115.py --auth`。
+
+```bash
+python scripts/manual.py                          # 交互菜单（编号选择，循环操作）
+python scripts/manual.py ls /tg115bot             # 列目录（--all 翻页取全部）
+python scripts/manual.py search 关键词             # 全盘搜索
+python scripts/manual.py upload /data/photos -d /tg115bot/photos
+python scripts/manual.py download /tg115bot/a.mkv -o ~/Downloads   # 下载到本地（sha1 校验）
+python scripts/manual.py offline add "magnet:?xt=…" -d /tg115bot/bt
+python scripts/manual.py offline list -a          # 离线任务（-a 全部页）
+python scripts/manual.py offline del <info_hash> --purge            # 删任务（--purge 连文件）
+python scripts/manual.py mkdir /tg115bot/newdir   # 还有 mv / rename / rm（rm 默认需确认）
+python scripts/manual.py df                       # 空间 / 离线配额 / 风控水位
+python scripts/manual.py share save "https://115.com/s/xxx?password=码"   # 需 share.cookies
+python scripts/manual.py --account b2 df          # 多账号时指定账号
+```
+
+退出码：`0` 成功 / `1` 失败 / `2` 需重新扫码授权（cron 可判断）。下载为单文件（v1 不支持目录递归下载）。
+
 ### Web 管理台（可选）
 
 `web.enable: true` 后，浏览器打开 `http://<host>:<port>/`（HTTP Basic 认证，凭据见 `config.web`）：
@@ -275,6 +296,7 @@ tg115bot/
     ├── service.ps1        # Windows 版服务管理
     ├── menu.ps1           # Windows 快捷管理菜单
     ├── check115.py        # 115 授权与链路自检
+    ├── manual.py          # 115 手动运维 CLI（交互菜单 + 子命令）
     ├── make_session.py    # 生成 TG user session
     └── healthcheck.py     # 容器健康检查
 ```

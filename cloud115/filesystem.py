@@ -38,10 +38,36 @@ async def mkdir_p(cloud, path: str) -> str:
 
 
 async def list_dir(cloud, cid: str = ROOT_CID) -> List[Dict[str, Any]]:
-    """列目录。返回条目 dict 列表（fn/fid/pid/fc/fs/pc 缩写字段）。"""
+    """列目录（首页）。返回条目 dict 列表（fn/fid/pid/fc/fs/pc 缩写字段）。"""
     data = await _api(cloud).list_files(int(cid) if str(cid).isdigit() else 0)
     items = data.get("list") or []
     return list(items)
+
+
+async def list_dir_all(cloud, cid: str = ROOT_CID, limit: int = 100,
+                       max_items: int = 5000) -> List[Dict[str, Any]]:
+    """列目录全量（翻页，max_items 兜底防配额烧穿）。"""
+    return await _api(cloud).list_files_all(
+        int(cid) if str(cid).isdigit() else 0, limit=limit, max_items=max_items)
+
+
+async def find_entry(cloud, path: str) -> Dict[str, Any]:
+    """路径 -> 父目录列表条目（含 pc=pickcode，下载直链必需）。不存在抛 FileNotFoundError。
+
+    不走 get_file_info：它经 /open/folder/get_info，对文件路径是否返回 pc 不稳定；
+    父目录列表条目（fn/fid/fc/fs/pc）稳定齐全，目录条目同样在其中（fc=0），单代码路径通吃。
+    代价：比 get_file_info 多 1 次（首页）到 N 次（父目录超一页时翻页）API 调用。
+    """
+    p = "/" + (path or "").strip("/")
+    if p == "/":
+        return {"fn": "/", "fid": "0", "fc": "0"}
+    parent, _, name = p.rstrip("/").rpartition("/")
+    parent = parent or "/"
+    cid = await resolve_cid(cloud, parent)
+    for it in await list_dir_all(cloud, cid):
+        if (it.get("fn") or it.get("file_name") or "").strip() == name:
+            return it
+    raise FileNotFoundError(f"115 路径不存在: {path}")
 
 
 async def upload_file(cloud, target_cid: str, local_path, filename: str) -> Dict[str, Any]:
