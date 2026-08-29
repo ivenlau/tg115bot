@@ -58,6 +58,17 @@ function AskYn([string]$Prompt, [string]$Default = "y") {
     return $Default
 }
 
+# PS 5.1 向原生命令传参时不转义内嵌双引号：Python 代码/JSON 里的 " 会被 CRT
+# 参数解析吃掉（t["x"] 变 t[x]，-c 直接 SyntaxError）。规避：代码与参数都
+# base64 化，命令行上只剩安全字符；引导行只用单引号（PS/CRT 均不特殊处理）。
+# 代码内经 exec 执行，sys.argv[1]=代码本身，故参数固定从 sys.argv[2] 取。
+function RunPy([string]$Code, [string]$Arg = "") {
+    $codeB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Code))
+    $argB64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Arg))
+    $boot    = "import base64,sys;exec(base64.b64decode(sys.argv[1]).decode('utf-8'))"
+    & $VenvPy -c $boot $codeB64 $argB64 2>&1
+}
+
 Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║   tg115bot 交互式初始化 (Windows)     ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
@@ -149,9 +160,9 @@ if (Test-Path config.yaml) {
     # PowerShell 的 -replace 会把其他段的同名键（如 api_key）一起误伤，bash 版用
     # sed 也有同样问题所以专门写了逐行状态机——这里直接复用该思路走 yaml 安全路径。
     $cfgPy = @'
-import json, sys
+import base64, json, sys
 from pathlib import Path
-vals = json.loads(sys.argv[1])
+vals = json.loads(base64.b64decode(sys.argv[2]).decode("utf-8"))
 import yaml
 p = Path("config.yaml")
 cfg = yaml.safe_load(p.read_text(encoding="utf-8"))
@@ -172,9 +183,11 @@ print("ok")
         proxy       = $proxy
         allowed     = $allowed
     } | ConvertTo-Json -Compress
-    # JSON 作为单参数传递（Compress 后无空格，不受引号解析影响）
-    $out = & $VenvPy -c $cfgPy $payload 2>&1
+    # JSON 经 base64 传递（见 RunPy 注释：PS 5.1 会吃掉参数里的双引号）
+    $out = RunPy $cfgPy $payload
     if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "ok") {
+        # 删掉 example 副本，否则重跑会命中"已存在，跳过"卡住重新收集
+        Remove-Item config.yaml -ErrorAction SilentlyContinue
         Die "config.yaml 写入失败: $out"
     }
     Info "config.yaml 已生成"
@@ -208,9 +221,9 @@ if (Test-Path config.yaml) {
         $aiModel = Ask "model" "deepseek-chat"
         # 同样走 yaml 安全路径，只动 ai: 段，不碰其他段同名键
         $aiPy = @'
-import json, sys
+import base64, json, sys
 from pathlib import Path
-vals = json.loads(sys.argv[1])
+vals = json.loads(base64.b64decode(sys.argv[2]).decode("utf-8"))
 import yaml
 p = Path("config.yaml")
 cfg = yaml.safe_load(p.read_text(encoding="utf-8"))
@@ -222,7 +235,7 @@ p.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding=
 print("ok")
 '@
         $payload = @{ base_url = $aiBase; api_key = $aiKey; model = $aiModel } | ConvertTo-Json -Compress
-        $out = & $VenvPy -c $aiPy $payload 2>&1
+        $out = RunPy $aiPy $payload
         if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "ok") {
             Warn "AI 段写入失败: $out（请手动编辑 config.yaml 的 ai: 段）"
         } else {
@@ -234,18 +247,18 @@ print("ok")
     if ($r -eq "y") {
         $webPwd = Ask "Web 密码（默认 changeme，务必修改）" "changeme"
         $webPy = @'
-import sys
+import base64, sys
 from pathlib import Path
 import yaml
 p = Path("config.yaml")
 cfg = yaml.safe_load(p.read_text(encoding="utf-8"))
 cfg.setdefault("web", {})
 cfg["web"]["enable"] = True
-cfg["web"]["password"] = sys.argv[1]
+cfg["web"]["password"] = base64.b64decode(sys.argv[2]).decode("utf-8")
 p.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
 print("ok")
 '@
-        $out = & $VenvPy -c $webPy $webPwd 2>&1
+        $out = RunPy $webPy $webPwd
         if ($LASTEXITCODE -ne 0 -or "$out" -notmatch "ok") {
             Warn "Web 段写入失败: $out（请手动编辑 config.yaml 的 web: 段）"
         } else {
