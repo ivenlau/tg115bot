@@ -98,12 +98,22 @@ fi
 
 # 用 pip --dry-run 校验 requirements（而非硬编码包名探测），requirements 更新后能检测到缺包
 # 注意：dry-run 缺包时退出码仍为 0，需 grep "Would install" 判断（pip 行为，非疏漏）
-if ! .venv/bin/pip install --dry-run -r requirements.txt 2>/dev/null | grep -q "Would install"; then
+# 坑（Windows 实机踩过，同 init.ps1）：pip 自身失败（网络不通）时输出为空，
+# 只 grep 会误判"已就绪"（venv 空着继续跑）——dry-run 失败也走真装暴露错误
+dry_out=$(.venv/bin/pip install --dry-run -r requirements.txt 2>/dev/null)
+dry_rc=$?
+if [[ $dry_rc -eq 0 && -z "$(echo "$dry_out" | grep "Would install")" ]]; then
   info "依赖已就绪"
 else
   info "安装/补齐依赖（首次较慢，含编译 TgCrypto）…"
   .venv/bin/pip install --upgrade pip wheel >/dev/null 2>&1 || true
-  .venv/bin/pip install -r requirements.txt || die "依赖安装失败，检查网络（可能需要代理）"
+  .venv/bin/pip install -r requirements.txt
+  if [[ $? -ne 0 ]]; then
+    # 国内直连 PyPI 常超时，清华镜像兜底重试一次
+    warn "直连 PyPI 失败，改用清华镜像重试…"
+    .venv/bin/pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
+      || die "依赖安装失败，检查网络（可能需要代理）"
+  fi
   info "依赖安装完成"
 fi
 

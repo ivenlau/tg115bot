@@ -114,12 +114,20 @@ if (Test-Path $VenvPy) {
 }
 
 # 对齐 bash 版：用 pip --dry-run 校验 requirements（缺包时退出码仍为 0，需看 "Would install"）
+# 坑（实机踩过）：pip 自身失败（网络不通）时 stderr 被吞、$dry 为空，只看
+# "Would install" 会误判"已就绪"（venv 空着继续跑，到 config 写入才炸
+# No module named 'yaml'）——dry-run 失败也走真装，让真实错误暴露出来
 Info "检查依赖（首次较慢，TgCrypto 无预编译时会纯 Python 回退安装）…"
 $dry = & $VenvPy -m pip install --dry-run -r requirements.txt 2>$null | Out-String
-if ($dry -match "Would install") {
+if ($LASTEXITCODE -ne 0 -or $dry -match "Would install") {
     & $VenvPy -m pip install --upgrade pip wheel 2>$null | Out-Null
     & $VenvPy -m pip install -r requirements.txt
-    if ($LASTEXITCODE -ne 0) { Die "依赖安装失败，检查网络（公司网络可能需要设代理）" }
+    if ($LASTEXITCODE -ne 0) {
+        # 国内直连 PyPI 常超时；Clash 等未开系统代理时 pip 不走代理，镜像兜底重试
+        Warn "直连 PyPI 失败，改用清华镜像重试…"
+        & $VenvPy -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+        if ($LASTEXITCODE -ne 0) { Die "依赖安装失败，检查网络（公司网络可能需要设代理）" }
+    }
     Info "依赖安装完成"
 } else {
     Info "依赖已就绪"
