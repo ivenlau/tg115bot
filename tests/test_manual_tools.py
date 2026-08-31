@@ -256,6 +256,67 @@ def test_parser_account_positions():
     assert p.parse_args(["ls", "/x", "--account", "b"]).account == "b"
     assert p.parse_args(["ls", "/x"]).account == ""
     assert p.parse_args([]).account == ""            # 无子命令 -> 菜单模式
+    assert p.parse_args(["auth"]).run is manual.cmd_auth
+
+
+# ── auth 扫码授权（fake cloud，零网络；sleep 与二维码渲染打桩） ──────────
+
+
+class _AuthCloud:
+    """cmd_auth 期望的最小形状：.raw 三件套 + ensure_login 探活。"""
+
+    def __init__(self, statuses):
+        self.raw = self
+        self.statuses = list(statuses)   # poll_qr_status 逐次弹出的状态
+        self.exchanged = False
+
+    async def start_qr_auth(self):
+        return {"uid": 1, "time": 2, "sign": "s",
+                "qrcode": "https://115.com/qr", "verifier": "v"}
+
+    async def poll_qr_status(self, uid, t, sign):
+        return self.statuses.pop(0) if self.statuses else 2
+
+    async def exchange_qr_token(self, uid, verifier):
+        self.exchanged = True
+        return True
+
+    async def ensure_login(self):
+        return self.exchanged
+
+
+def test_cmd_auth():
+    shown = []
+
+    async def go(statuses):
+        cloud = _AuthCloud(statuses)
+        ctx = manual.Ctx(cfg=None, account=types.SimpleNamespace(name="t"), rate=None,
+                         cloud=cloud)
+        return await manual.cmd_auth(ctx, None), cloud
+
+    real_sleep, real_print_qr = asyncio.sleep, manual._print_qr
+
+    async def fast_sleep(_sec):
+        return None
+
+    asyncio.sleep = fast_sleep                 # 跳过出码 5s + 轮询 2s 等待
+    manual._print_qr = shown.append            # 免 qrcode 库、不打终端
+    try:
+        # 成功：待扫 -> 已扫待确认 -> 确认 -> 换 token -> 探活通过
+        rc, cloud = asyncio.run(go([None, 1, 2]))
+        assert rc == 0 and cloud.exchanged
+        assert shown == ["https://115.com/qr"]        # 出码内容是 QR 数据本身
+        # 二维码过期 / APP 里取消
+        assert asyncio.run(go([-1]))[0] == 1
+        assert asyncio.run(go([-2]))[0] == 1
+    finally:
+        asyncio.sleep, manual._print_qr = real_sleep, real_print_qr
+
+
+def test_menu_has_auth_item():
+    item = manual.MENU_BY_NUM["16"]
+    assert item.action == "auth" and not item.fields
+    assert manual.build_argv(item, {}) == ["auth"]
 
 
 if __name__ == "__main__":

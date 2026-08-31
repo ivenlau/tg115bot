@@ -17,9 +17,11 @@
               rm <路径>… [--yes]                 删除（入回收站，默认需确认）
     其他      df                                 空间/离线配额/风控水位
               share save <链接> [-d 目录] [-p 访问码]  分享转存（需 share.cookies）
+              auth                               扫码（重新）授权，强刷 token
 
-全局参数 --account <名>（默认 config.accounts 第一个）；未授权先跑
-python scripts/check115.py --auth 扫码。退出码：0 成功 / 1 失败 / 2 需重新授权。
+全局参数 --account <名>（默认 config.accounts 第一个）；未授权/token 失效（如
+40140116 授权已解除）时跑 python scripts/manual.py auth 扫码续上。
+退出码：0 成功 / 1 失败 / 2 需重新授权。
 
 示例：
     python scripts/manual.py                          # 进交互菜单
@@ -34,6 +36,7 @@ import argparse
 import asyncio
 import hashlib
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field as dc_field
@@ -77,8 +80,8 @@ def _pick_account(cfg, name: str):
     return cfg.primary_account
 
 
-async def build_ctx(cfg, account_name: str) -> Ctx:
-    """建账号上下文：client + init + 登录校验。失败抛 RuntimeError。"""
+async def build_ctx(cfg, account_name: str, *, need_login: bool = True) -> Ctx:
+    """建账号上下文：client + init + 登录校验（need_login=False 供 auth 扫码用）。失败抛 RuntimeError。"""
     acct = _pick_account(cfg, account_name)
     if acct is None:
         names = ", ".join(a.name for a in cfg.accounts) or "（config.accounts 为空）"
@@ -86,15 +89,16 @@ async def build_ctx(cfg, account_name: str) -> Ctx:
     rate = RateLimiter(cfg.rate115.min_interval_sec)
     cloud = Cloud115Client(acct, cfg.session_dir, rate)
     await cloud.init()
-    try:
-        if not await cloud.ensure_login():
-            raise RuntimeError("账号未授权/token 失效。先跑: python scripts/check115.py --auth")
-    except AuthRequiredError as e:
-        await cloud.close()
-        raise RuntimeError(f"{e}。先跑: python scripts/check115.py --auth") from e
-    except Exception:
-        await cloud.close()
-        raise
+    if need_login:
+        try:
+            if not await cloud.ensure_login():
+                raise RuntimeError("账号未授权/token 失效。先跑: python scripts/manual.py auth")
+        except AuthRequiredError as e:
+            await cloud.close()
+            raise RuntimeError(f"{e}。先跑: python scripts/manual.py auth") from e
+        except Exception:
+            await cloud.close()
+            raise
     return Ctx(cfg=cfg, account=acct, rate=rate, cloud=cloud)
 
 
@@ -428,6 +432,63 @@ async def cmd_df(ctx: Ctx, args) -> int:
     return 0
 
 
+def _print_qr(data: str) -> None:
+    """终端展示二维码（与 scripts/check115.py 同款）。
+
+    115 的 authDeviceCode 直接返回 QR 数据（URL 字符串），qrcode.print_ascii
+    纯核心功能即可渲染；未装 qrcode 库降级为打印链接。
+    深色终端背景扫不动时，设环境变量 QR_INVERT=0 切换反色。
+    """
+    invert = os.environ.get("QR_INVERT", "1") != "0"
+    try:
+        import qrcode
+    except ImportError:
+        print("    未装 qrcode 库：请用手机浏览器打开此链接完成授权")
+        print("   ", data)
+        return
+    q = qrcode.QRCode()
+    q.add_data(data)
+    q.make(fit=True)
+    print("\n    请用 115 APP 扫描（深色终端背景扫不动时: QR_INVERT=0 重跑）\n")
+    q.print_ascii(invert=invert)
+    print("\n    扫不了就用手机浏览器打开：")
+    print("   ", data, "\n")
+
+
+async def cmd_auth(ctx: Ctx, args) -> int:
+    """扫码（重新）授权：无视现有 token 强刷 —— 出码 -> 轮询 -> 换新 token 落盘。
+
+    适用：token 彻底失效（40140116 授权不存在或已解除等，refresh_token 也救不回）。
+    """
+    api = ctx.cloud.raw
+    print(f"👤 账号 {ctx.account.name}：发起扫码授权（旧 token 将被覆盖）")
+    qr = await api.start_qr_auth()
+    _print_qr(qr["qrcode"])
+    await asyncio.sleep(5)          # 官方实现：出码后先等 5s 再开始轮询
+    last = None
+    while True:
+        st = await api.poll_qr_status(qr["uid"], qr["time"], qr["sign"])
+        if st == 2:
+            await api.exchange_qr_token(qr["uid"], qr["verifier"])
+            print("    ✅ 授权成功，token 已保存")
+            break
+        if st == -1:
+            print("    ❌ 二维码已过期，请重跑 auth")
+            return 1
+        if st == -2:
+            print("    ❌ 你在 APP 里取消了授权")
+            return 1
+        if st == 1 and last != 1:
+            print("    📱 已扫码，请在手机上点确认 …", flush=True)
+        last = st
+        await asyncio.sleep(2)
+    if not await ctx.cloud.ensure_login():
+        print("    ⚠️ token 已保存，但探活失败（稍后可用 df 复查）")
+        return 1
+    print("    ✅ 探活成功，授权已恢复")
+    return 0
+
+
 async def cmd_share(ctx: Ctx, args) -> int:
     return await args.share_run(ctx, args)
 
@@ -556,6 +617,7 @@ COMMANDS: dict[str, Command] = {
     "rename":  Command(cmd_rename, "重命名", _add_rename),
     "df":      Command(cmd_df, "空间/离线配额/风控水位"),
     "share":   Command(cmd_share, "分享链接转存", _add_share),
+    "auth":    Command(cmd_auth, "扫码（重新）授权，强刷 token"),
 }
 
 
@@ -590,7 +652,7 @@ async def run_cmd(ctx: Ctx, args) -> int:
     try:
         return await run(ctx, args)
     except AuthRequiredError:
-        print("❌ 115 令牌已彻底失效，请重新扫码: python scripts/check115.py --auth")
+        print("❌ 115 令牌已彻底失效，请重新扫码: python scripts/manual.py auth")
         return 2
     except FileNotFoundError as e:
         print(f"❌ {e}")
@@ -683,6 +745,7 @@ MENU: list[MenuItem] = [
     MenuItem(15, "其他", "切换账号", SWITCH, [
         MenuField("account", "账号名（空=列出可选）", ""),
     ]),
+    MenuItem(16, "其他", "扫码（重新）授权 auth", "auth", []),
 ]
 
 MENU_BY_NUM = {str(m.num): m for m in MENU}
@@ -774,8 +837,10 @@ def main() -> int:
     cfg = load_config()
 
     async def runner() -> int:
+        # auth 不要求已登录（token 失效时正是要用它续授权），其余命令均需探活通过
+        need_login = getattr(args, "cmd", None) != "auth"
         try:
-            ctx = await build_ctx(cfg, account)
+            ctx = await build_ctx(cfg, account, need_login=need_login)
         except RuntimeError as e:
             print(f"❌ {e}")
             return 2

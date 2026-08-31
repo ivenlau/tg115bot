@@ -549,8 +549,9 @@ class Open115Client:
     # ── 探活 ─────────────────────────────────────────────────────────────
     async def check_login(self) -> bool:
         try:
-            info = await self.get_file_info("/", use_cache=False)
-            return info is not None
+            # 探活必须真发请求：get_file_info("/") 有根路径短路特判（不发网络），
+            # 走轻量 user/info 才能暴露 token 失效（如 40140116 授权已解除）
+            return bool(await self.user_space())
         except Exception as e:  # noqa: BLE001
             log.warning("115 探活失败: %r", e)
             return False
