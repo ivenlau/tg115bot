@@ -7,7 +7,7 @@
 #   [2/7] Python 环境   .venv + pip install -r requirements.txt
 #   [3/7] mihomo 代理   国内服务器必需（直连不通才引导；已装则读实际端口并穿代理实测）
 #   [4/7] 配置文件      config.yaml（TG api_id/hash/bot_token 交互收集）
-#   [5/7] 115 授权      终端二维码扫码（可跳过，之后 TG 里 /auth）
+#   [5/7] 115 授权      先探活已有 token，失效则终端扫码（可跳过，之后 TG 里 /auth）
 #   [6/7] 可选功能      AI 模式 / Web 台（全部可回车跳过）
 #   [7/7] 完成提示      下一步命令
 #
@@ -227,8 +227,10 @@ fi
 # ═══ [5/7] 115 授权 ═══════════════════════════════════════════════════
 step "[5/7] 115 账号授权（扫码）"
 
-if ls config/open_token_*.json >/dev/null 2>&1; then
-  info "已有 115 token，跳过"
+# token 文件存在 ≠ 有效：授权被解除/refresh_token 失效只有真发请求才暴露
+# （access_token 过期会自动刷新，不误报）——与其等运行时炸，不如 init 探活一次
+if .venv/bin/python scripts/check115.py --probe; then
+  info "115 授权有效，跳过"
 else
   ask_yn "现在扫码授权 115？（也可稍后在 TG 里发 /auth）" "y"
   if [[ "$REPLY" == "y" ]]; then

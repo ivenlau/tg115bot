@@ -3,6 +3,7 @@
 用法：
     python scripts/check115.py            # 已授权：跑完整上传链路
     python scripts/check115.py --auth     # 未授权：终端打印二维码扫码授权
+    python scripts/check115.py --probe    # 轻量探活：只验 token 有效性（init.sh 用）
 
 验证链路（每步打印结果，便于定位问题）：
   [1] 初始化(加载token)  [2] 探活  [3] 列根目录  [4] mkdir 目标目录
@@ -61,6 +62,22 @@ async def do_auth(cloud: Cloud115Client) -> None:
         await asyncio.sleep(2)
 
 
+async def _probe(cloud: Cloud115Client) -> None:
+    """轻量探活：只验证 token 真实有效，不跑上传链路（init.sh [5/7] 用）。
+
+    token 文件存在 ≠ 有效：授权被解除(40140116)/refresh_token 失效只有真发
+    请求才暴露；access_token 过期(40140125)会被自动刷新，不算失效。
+    退出码：0 有效 / 1 无 token 或失效（init.sh 按此分支）。
+    """
+    if not cloud.raw.has_token():
+        print("    ❌ 无 token")
+        sys.exit(1)
+    if not await cloud.ensure_login():
+        print("    ❌ token 已失效（授权解除/刷新失败）或 115 不可达，需重新扫码（--auth）")
+        sys.exit(1)
+    print("    ✅ token 有效")
+
+
 def _print_qr(data: str) -> None:
     """终端展示二维码。
 
@@ -99,6 +116,9 @@ async def main() -> None:
 async def _run(cloud: Cloud115Client, cfg) -> None:
     if "--auth" in sys.argv:
         await do_auth(cloud)
+        return
+    if "--probe" in sys.argv:
+        await _probe(cloud)
         return
 
     print("[1] 初始化 115 客户端 … done")
