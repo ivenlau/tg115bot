@@ -319,6 +319,34 @@ def test_menu_has_auth_item():
     assert manual.build_argv(item, {}) == ["auth"]
 
 
+def test_expand_sources():
+    root = Path(tempfile.mkdtemp())
+    try:
+        (root / "sub").mkdir()
+        for n in ("p1.jpg", "p2.jpg", "q.txt", "sub/p3.jpg"):
+            (root / n).write_text("x")
+        r = str(root)
+        # 通配符：只匹配 p*.jpg；文件来源 base=父目录（远端用原名）
+        files, bases, miss = manual.expand_sources([r + "/p*.jpg"])
+        assert sorted(f.name for f in files) == ["p1.jpg", "p2.jpg"] and not miss
+        assert all(bases[f] == root for f in files)
+        # 目录 + 通配符混合来源：递归 4 个，跨来源去重；目录来源 base=目录自身（保留结构）
+        files, bases, miss = manual.expand_sources([r, r + "/p*.jpg"])
+        assert len(files) == 4 and not miss
+        assert bases[root / "sub" / "p3.jpg"] == root
+        # 无匹配 / 路径不存在 -> 记入 missing，不影响其余来源
+        files, _, miss = manual.expand_sources([r + "/zz*.nope", r + "/q.txt"])
+        assert [f.name for f in files] == ["q.txt"] and "无匹配" in miss[0]
+        files, _, miss = manual.expand_sources([r + "/ghost"])
+        assert not files and "路径不存在" in miss[0]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # parser 接受多路径（nargs="+"）
+    args = manual.build_parser().parse_args(["upload", "/a.jpg", "/b.jpg", "-d", "/t"])
+    assert args.sources == ["/a.jpg", "/b.jpg"] and args.dir == "/t"
+
+
 if __name__ == "__main__":
     fns = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     fails = 0

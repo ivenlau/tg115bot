@@ -8,7 +8,7 @@
     查看      ls <路径> [--limit N] [--all]      列目录（--all 翻页取全部）
               info <路径>                        文件/目录详情（含 pickcode）
               search <关键词>                    全盘搜索
-    传输      upload <本地路径> [-d 115目录]      上传（秒传/OSS 全链路）
+    传输      upload <本地路径>… [-d 115目录]     上传（秒传/OSS 全链路；目录递归，支持通配符）
               download <115路径> [-o 本地目录]   下载单文件到本地（sha1 校验）
     离线      offline add <url>… [-d 目录]       添加离线任务（magnet/ed2k/直链）
               offline list [-a]                  任务列表（-a 翻页全部）
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import hashlib
 import logging
 import os
@@ -133,6 +134,43 @@ def collect_files(src: Path) -> list[Path]:
     if src.is_file():
         return [src]
     return sorted(p for p in src.rglob("*") if p.is_file())
+
+
+def _has_wildcard(s: str) -> bool:
+    return any(c in s for c in "*?[")
+
+
+def expand_sources(raws: list[str]) -> tuple[list[Path], dict[Path, Path], list[str]]:
+    """多来源展开为待传文件：通配符 glob、目录递归、跨来源去重保序。
+
+    返回 (文件列表, file->base 映射, 未命中来源说明)。base 决定远端相对路径：
+    目录来源 = 目录自身（保留内部结构），文件来源 = 父目录（直接用原名）。
+    """
+    files: list[Path] = []
+    bases: dict[Path, Path] = {}
+    seen: set[Path] = set()
+    missing: list[str] = []
+    for raw in raws:
+        if _has_wildcard(raw):
+            srcs = [Path(m) for m in sorted(glob.glob(str(Path(raw).expanduser())))]
+            if not srcs:
+                missing.append(f"无匹配: {raw}")
+                continue
+        else:
+            src = Path(raw).expanduser()
+            if not src.exists():
+                missing.append(f"路径不存在: {src}")
+                continue
+            srcs = [src]
+        for src in srcs:
+            base = src if src.is_dir() else src.parent
+            for f in collect_files(src):
+                key = f.resolve()
+                if key not in seen:
+                    seen.add(key)
+                    files.append(f)
+                    bases[f] = base
+    return files, bases, missing
 
 
 def make_progress():
@@ -255,17 +293,14 @@ async def cmd_search(ctx: Ctx, args) -> int:
 
 
 async def cmd_upload(ctx: Ctx, args) -> int:
-    src = Path(args.source).expanduser()
-    if not src.exists():
-        print(f"❌ 路径不存在: {src}")
-        return 1
     target_root = args.dir or ctx.cfg.upload.target_dir
-    files = collect_files(src)
-    base = src if src.is_dir() else src.parent
+    files, bases, missing = expand_sources(args.sources)
+    for m in missing:
+        print(f"❌ {m}")
     print(f"👤 账号 {ctx.account.name}，目标目录: {target_root}，共 {len(files)} 个文件")
     ok = fail = 0
     for i, f in enumerate(files, 1):
-        rel = f.relative_to(base).parent
+        rel = f.relative_to(bases[f]).parent
         # 目录上传时保持相对路径结构；文件上传用原名
         remote_dir = str(target_root.rstrip("/") + ("/" + rel.as_posix() if str(rel) != "." else ""))
         name = f.name
@@ -282,7 +317,7 @@ async def cmd_upload(ctx: Ctx, args) -> int:
             log.debug("上传失败: %s", f, exc_info=True)
             fail += 1
     print(f"\n完成：成功 {ok} / 失败 {fail} / 共 {len(files)}")
-    return 1 if fail else 0
+    return 1 if (fail or missing) else 0
 
 
 async def cmd_download(ctx: Ctx, args) -> int:
@@ -576,7 +611,7 @@ def _add_search(sp):
 
 
 def _add_upload(sp):
-    sp.add_argument("source", help="本地文件或目录")
+    sp.add_argument("sources", nargs="+", help="本地文件/目录/通配符（空格分隔多个）")
     sp.add_argument("-d", "--dir", default="", help="115 目标目录（默认 upload.target_dir）")
 
 
@@ -703,7 +738,7 @@ MENU: list[MenuItem] = [
         MenuField("keyword", "关键词", "", positional=True),
     ]),
     MenuItem(4, "传输", "上传 upload", "upload", [
-        MenuField("source", "本地文件/目录", "", positional=True),
+        MenuField("source", "本地文件/目录/通配符（空格分隔多个）", "", positional=True, multi=True),
         MenuField("dir", "115 目标目录（空=默认）", "", flag="-d"),
     ]),
     MenuItem(5, "传输", "下载 download", "download", [

@@ -177,7 +177,8 @@ python main.py
 python scripts/manual.py                          # 交互菜单（编号选择，循环操作）
 python scripts/manual.py ls /tg115bot             # 列目录（--all 翻页取全部）
 python scripts/manual.py search 关键词             # 全盘搜索
-python scripts/manual.py upload /data/photos -d /tg115bot/photos
+python scripts/manual.py upload /data/photos -d /tg115bot/photos   # 目录递归，保持内部结构
+python scripts/manual.py upload '/data/p*.jpg' -d /tg115bot/photos  # 通配符/多路径（引号防 shell 展开多个）
 python scripts/manual.py download /tg115bot/a.mkv -o ~/Downloads   # 下载到本地（sha1 校验）
 python scripts/manual.py offline add "magnet:?xt=…" -d /tg115bot/bt
 python scripts/manual.py offline list -a          # 离线任务（-a 全部页）
