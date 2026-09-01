@@ -2,7 +2,7 @@
 
 资源在 115 服务器下载，不占本地带宽、不走代理。入口：
   - 手动: /offline <链接> 或直接给 bot 发磁力/ed2k/直链（handlers 识别）
-  - RSS / 电影订阅（Phase B/C）复用 ``submit()`` 提交。
+  - RSS 复用 ``submit()`` 提交。
 
 状态机: pending -> running -> done / failed(retrying -> 重新提交, 最多 N 次)。
 后台任务 ``offline_watcher`` 周期轮询 115 任务列表，比对本地 DB 同步状态并通知。

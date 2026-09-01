@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **MTProto 大文件下载**：多路并行分片（`stream_media` × N 路），绕过 Bot API 20MB 限制，支持 ≥2GB 视频
+- **MTProto 大文件下载**：多路并行分片（`stream_media` × N 路），绕过 Bot API 20MB 限制；bot 单文件可达 2GB，配置 user session（Premium 账号）可达 4GB
 - **秒传优先**：服务端 SHA1 去重，命中即秒级落地，跳过整个上传阶段
 - **OSS 直传**：秒传未命中时走阿里云 OSS 分片上传（V1 签名，含二次区间校验）
 - **115 开放平台**：手写协议实现（零第三方 115 SDK 依赖），扫码授权，token 自动刷新
@@ -12,7 +12,6 @@
 - **频道监控**：订阅频道 + 关键词白/黑名单 + 目标目录规则，命中自动上传（图片/相册同样支持）
 - **115 离线下载**：发磁力/ed2k/直链即自动离线（115 服务器下载，不占本地带宽），完成通知 + 失败自动重试
 - **RSS 订阅**：订阅任意 RSS 源，新条目自动提取链接离线，关键词过滤 + 去重
-- **电影订阅**：片名订阅追更，TMDB 匹配 + 资源发布自动离线（分辨率优先 + 中字加分）
 - **频道回溯备份**：整频道历史媒体批量搬进 115，断点续传，队列背压防灌爆
 - **文件管理**：`/ls` `/search` `/rm` `/mv` 在 TG 里遥控 115 网盘
 - **分享链接转存**：发 115 分享链接（含访问码）自动转存
@@ -186,6 +185,7 @@ python scripts/manual.py offline del <info_hash> --purge            # 删任务�
 python scripts/manual.py mkdir /tg115bot/newdir   # 还有 mv / rename / rm（rm 默认需确认）
 python scripts/manual.py df                       # 空间 / 离线配额 / 风控水位
 python scripts/manual.py share save "https://115.com/s/xxx?password=码"   # 需 share.cookies
+python scripts/manual.py auth                     # 扫码（重新）授权，强刷 token
 python scripts/manual.py --account b2 df          # 多账号时指定账号
 ```
 
@@ -229,7 +229,7 @@ ai:
 - “网盘还有多少空间？离线配额呢？” → 调 `full_status` 汇报
 - “订阅这个 RSS，只要 1080p 以上” → `rss_add` + 关键词
 
-AI 可调用全部内置工具（21 个）；需要新能力时它会写一个受限沙箱内的
+AI 可调用全部内置工具（18 个）；需要新能力时它会写一个受限沙箱内的
 Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）。
 会话记忆持久化，重启不丢；`/ai off` 临时停用。
 
@@ -259,6 +259,7 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `telegram.proxy` | 空 | TG 代理（`socks5://` 或 `http://`）；115 不走代理 |
+| `telegram.user_session` | 空 | user session 提升下载额度、缓解 FloodWait（Premium 可下 4GB）；`python scripts/make_session.py` 生成 |
 | `upload.target_dir` | `/tg115bot` | 115 默认目标目录 |
 | `upload.workers` | 8 | TG 并行下载分片数 |
 | `upload.oss_concurrency` | 8 | OSS 分片并发数 |
@@ -271,6 +272,7 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 | `ai.base_url/api_key/model` | 空 | AI 助手（OpenAI 兼容；空=停用） |
 | `web.enable` | false | Web 管理台开关 |
 | `storage.min_free_gb` | 5 | 磁盘可用空间下限，低于则暂停接新任务 |
+| `storage.keep_local` | false | true 时上传成功后保留本地副本到 `<work_dir>/copies/` |
 
 环境变量可覆盖任意配置：`TG115BOT__段__键=值`（双下划线分层，如 `TG115BOT__TELEGRAM__BOT_TOKEN`）。
 
@@ -281,7 +283,7 @@ tg115bot/
 ├── main.py                # 入口
 ├── config.py              # 配置加载（yaml + 环境变量覆盖）
 ├── bot/                   # TG 客户端、命令处理、频道监控
-├── core/                  # 下载/上传/离线/RSS/电影订阅/备份/直链/队列/整理
+├── core/                  # 下载/上传/离线/RSS/备份/直链/队列/整理
 ├── ai/                    # AI 助手：LLM 客户端/工具集/agent 循环/动态工具沙箱
 ├── cloud115/              # 115 开放平台 + OSS 直传协议实现
 ├── persistence/           # SQLite 持久化
@@ -306,7 +308,7 @@ tg115bot/
 - 115 风控：内置请求最小间隔 + 抖动 + 指数退避，请勿把并发调得过高。
 - token 过期自动刷新；彻底失效时 `/auth` 重新扫码即可。
 - 大文件全程流式处理（预分配 + 分片 seek 写盘），不占额外内存。
-- `downloads/` 为临时目录，上传成功后自动清理。
+- `downloads/` 为临时目录，上传成功后自动清理（`storage.keep_local: true` 时保留副本）。
 
 ## 免责声明
 
