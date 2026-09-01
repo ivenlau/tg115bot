@@ -5,7 +5,7 @@
 # 流程（每步可跳过，已就绪的自动跳过）:
 #   [1/7] 系统依赖      python3.12 / venv / git 等（apt）
 #   [2/7] Python 环境   .venv + pip install -r requirements.txt
-#   [3/7] mihomo 代理   国内服务器必需（检测直连 TG 不通才引导；境外自动跳过）
+#   [3/7] mihomo 代理   国内服务器必需（直连不通才引导；已装则读实际端口并穿代理实测）
 #   [4/7] 配置文件      config.yaml（TG api_id/hash/bot_token 交互收集）
 #   [5/7] 115 授权      终端二维码扫码（可跳过，之后 TG 里 /auth）
 #   [6/7] 可选功能      AI 模式 / Web 台（全部可回车跳过）
@@ -86,6 +86,11 @@ command -v git >/dev/null 2>&1 || {
   command -v apt-get >/dev/null 2>&1 && apt-get install -y git || warn "缺少 git（不影响核心功能）"
 }
 
+# [3/7] 穿代理实测连通性要用 curl（setup-mihomo.sh 也会自动装，这里提前补齐）
+command -v curl >/dev/null 2>&1 || {
+  command -v apt-get >/dev/null 2>&1 && apt-get install -y curl || warn "缺少 curl（将跳过代理连通性实测）"
+}
+
 # ═══ [2/7] Python 环境 ════════════════════════════════════════════════
 step "[2/7] Python 虚拟环境与依赖"
 
@@ -121,22 +126,58 @@ fi
 step "[3/7] 代理（国内服务器需要）"
 
 tg_direct_ok() {
-  timeout 5 bash -c 'echo > /dev/tcp/149.154.167.51/44' 2>/dev/null
+  timeout 5 bash -c 'echo > /dev/tcp/149.154.167.51/443' 2>/dev/null
+}
+
+# 读 mihomo 实际监听端口（取法同 setup-mihomo.sh）——机场配置未必用 7890，
+# 硬编码会往 config.yaml 写一个连不上的 proxy
+mihomo_port() {
+  local p
+  p=$(grep -E '^(mixed-port|port|socks-port):' /etc/mihomo/config.yaml 2>/dev/null \
+       | head -1 | awk '{print $2}' | tr -d "'\"" || true)
+  echo "${p:-7890}"
+}
+
+# 穿代理实测 TG 可达：拿到任意 HTTP 状态码即证明隧道通（000 = 连不上/超时）。
+# 只看"服务在跑"会漏掉订阅过期、节点全挂——那种 proxy 写进去 TG 也连不上
+tg_proxy_ok() {  # tg_proxy_ok <proxy-url>
+  local code
+  code=$(curl -s -x "$1" --connect-timeout 10 --max-time 20 \
+         -o /dev/null -w '%{http_code}' https://api.telegram.org/ 2>/dev/null) || true
+  [[ -n $code && $code != 000 ]]
+}
+
+deploy_mihomo() {  # 交互收集订阅并部署，成功后按实际端口设 TG_PROXY
+  ask "请输入机场订阅地址（Clash 订阅链接）"
+  bash scripts/setup-mihomo.sh "$REPLY" || die "mihomo 部署失败，可稍后手动: sudo scripts/setup-mihomo.sh <订阅>"
+  TG_PROXY="http://127.0.0.1:$(mihomo_port)"
 }
 
 if tg_direct_ok; then
   info "可直连 Telegram，跳过代理配置"
   TG_PROXY=""
 elif command -v mihomo >/dev/null 2>&1 && systemctl is-active --quiet mihomo 2>/dev/null; then
-  info "mihomo 已在运行"
-  TG_PROXY="http://127.0.0.1:7890"
+  PORT=$(mihomo_port)
+  TG_PROXY="http://127.0.0.1:$PORT"
+  info "mihomo 已在运行（端口 $PORT）"
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "缺少 curl，跳过穿代理实测"
+  elif tg_proxy_ok "$TG_PROXY"; then
+    info "穿代理实测 TG 可达 ✓"
+  else
+    warn "mihomo 在跑，但穿代理访问 TG 失败（订阅过期/节点异常常见）"
+    ask_yn "重新部署 mihomo 更新订阅？" "n"
+    if [[ "$REPLY" == "y" ]]; then
+      deploy_mihomo
+    else
+      warn "仍按 $TG_PROXY 写入——节点不通时 TG 将无法连接"
+    fi
+  fi
 else
   warn "无法直连 Telegram（国内服务器常见）"
   ask_yn "现在部署 mihomo 代理？需要订阅地址" "y"
   if [[ "$REPLY" == "y" ]]; then
-    ask "请输入机场订阅地址（Clash 订阅链接）"
-    bash scripts/setup-mihomo.sh "$REPLY" || die "mihomo 部署失败，可稍后手动: sudo scripts/setup-mihomo.sh <订阅>"
-    TG_PROXY="http://127.0.0.1:7890"
+    deploy_mihomo
   else
     TG_PROXY=""
     warn "跳过代理——TG 将无法连接。可稍后: sudo scripts/setup-mihomo.sh <订阅>"
