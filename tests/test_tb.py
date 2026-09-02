@@ -162,6 +162,31 @@ def test_cloud_loop_single_loop_for_session():
         cl.stop()
 
 
+def test_files_page_duplicate_names_ok():
+    """回归：同名条目（115 列表「递归混入」形态）不得炸 DuplicateKey。
+
+    旧实现按文件名作 row key → 同名即崩；修复后不指定 key（自动生成）。
+    同时验证 .. 行可被识别为目录（回车回上级的判定依据）。
+    """
+    import asyncio
+    from tb.tui import TBApp
+
+    async def go():
+        app = TBApp()
+        async with app.run_test(size=(110, 32)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one("#nav").index = 1      # -> 文件页
+            await pilot.pause(0.5)
+            page = app.query_one("#content FilesPage")
+            t = page.query_one("#files")
+            t.clear()
+            t.add_row("📂", "..", "")
+            t.add_row("📄", "same.mkv", "1G")    # 两条同名 —— 旧实现在此 DuplicateKey
+            t.add_row("📄", "same.mkv", "2G")
+            assert t.row_count == 3
+    asyncio.run(go())
+
+
 def test_tui_app_headless():
     """Textual 无头启动：组合/翻页不炸（数据层不可用时应优雅降级）。"""
     import asyncio

@@ -258,6 +258,7 @@ class FilesPage(Page):
         super().__init__()
         self.path = "/tg115bot"
         self._confirm_key: str | None = None
+        self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
     def compose(self) -> ComposeResult:
         yield Label("文件（115 网盘）", classes="page-title")
@@ -277,6 +278,8 @@ class FilesPage(Page):
         if ctx is None:
             self.query_one("#files", DataTable).add_row("⚠️", self.app.ctx_error or "初始化中…", "")
             return
+        self._load_gen += 1
+        gen = self._load_gen
 
         def fill() -> None:
             from cloud115.filesystem import resolve_cid
@@ -293,6 +296,8 @@ class FilesPage(Page):
                         for it in items]
 
             def err(msg: str) -> None:
+                if gen != self._load_gen:
+                    return
                 t = self.query_one("#files", DataTable)
                 t.clear()
                 t.add_row("⚠️", msg, "")
@@ -303,24 +308,31 @@ class FilesPage(Page):
                 return
 
             def apply() -> None:
+                if gen != self._load_gen:      # 期间已导航到别处，丢弃过期结果
+                    return
                 t = self.query_one("#files", DataTable)
                 t.clear()
-                t.add_row("📁", "..", "")
+                t.add_row("📂", "..", "")      # 图标必须与目录一致，回车才能回上级
                 for r in rows:
-                    t.add_row(*r, key=r[1])
+                    t.add_row(*r)              # 不指定 key：115 列表的「递归混入」形态
+                                                 # 会出现同名条目，按名作 key 会 DuplicateKey
                 self.query_one("#files-path", Static).update(self.path)
             self.app.call_from_thread(apply)
         self.run_worker(fill, thread=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.row_key is None or event.row_key.value is None:
+        if event.row_key is None:
             return
-        name = event.row_key.value
-        row = self.query_one("#files", DataTable).get_row(event.row_key)
-        if row and str(row[0]).startswith("📂"):
-            self.path = (self.path.rstrip("/") + "/" + name if name != ".."
-                         else str(Path(self.path).parent))
-            self.load_dir()
+        try:
+            row = self.query_one("#files", DataTable).get_row(event.row_key)
+        except Exception:  # noqa: BLE001 -- 行已被 clear/重建
+            return
+        if not row or not str(row[0]).startswith("📂"):
+            return
+        name = str(row[1])     # 名字取行数据（未用 key，key 是自动生成的）
+        self.path = (self.path.rstrip("/") + "/" + name if name != ".."
+                     else str(Path(self.path).parent))
+        self.load_dir()
 
     def on_key(self, event) -> None:  # noqa: BLE001
         if event.key == "r":
