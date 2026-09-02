@@ -3,9 +3,11 @@
 五个页面：仪表盘 / 文件 / 离线任务 / 日志 / 授权。侧栏导航 + Footer 快捷键。
 数据层与 CLI 完全共用（manual.py 的 helpers + cloud115 client），TUI 只是视图。
 
-- 115 上下文在启动后台构建（need_login=False，未授权也能进 TUI 去授权页扫码）
-- 耗时操作（上传/扫码轮询）走 Textual worker（线程里独立事件循环），不卡 UI
-- 页面各自的 set_interval 定时器在卸载时停止
+关键设计——常驻 115 循环：
+  aiohttp 的 ClientSession 绑定创建它的事件循环。若在某次 asyncio.run() 的
+  临时循环上建 ctx、再在另一次临时循环上使用，就会连环 "Event loop is closed"。
+  因此 115 客户端一生都活在 `_CloudLoop`（专属线程 + run_forever 循环）上，
+  页面的线程 worker 经 submit() 跨线程提交协程，UI 循环永不阻塞、会话永不换循环。
 """
 from __future__ import annotations
 
@@ -13,7 +15,9 @@ import asyncio
 import io
 import os
 import shutil
+import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -40,6 +44,36 @@ def _qr_ascii(data: str) -> str:
         return data
 
 
+class _CloudLoop:
+    """常驻线程 + 专属事件循环：115 客户端（aiohttp session）绑定其上。
+
+    submit() 从任意线程把协程投递到该循环执行并阻塞等待结果；
+    所有 115 调用共用这一个循环，会话不会跨循环使用。
+    """
+
+    def __init__(self) -> None:
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="tb-cloud", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self._ready.set()
+        self.loop.run_forever()
+        self.loop.close()
+
+    def submit(self, coro) -> Future:
+        self._ready.wait(5)
+        assert self.loop is not None
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    def stop(self) -> None:
+        if self.loop is not None and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+
 class TBApp(App):
     """tg115bot 主应用。"""
 
@@ -63,6 +97,7 @@ class TBApp(App):
     def __init__(self, account: str = "") -> None:
         super().__init__()
         self.account = account
+        self._cloud = _CloudLoop()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -74,11 +109,11 @@ class TBApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self._build_ctx, thread=True)
+        self.run_worker(self._build_ctx, thread=True, exclusive=True)
         self.query_one("#nav", ListView).index = 0   # 触发 Highlighted -> 挂载首页
 
     def _build_ctx(self) -> None:
-        """线程 worker：独立事件循环里建 115 上下文，不卡启动。"""
+        """线程 worker：在常驻 115 循环上建上下文（need_login=False，未授权可去授权页扫码）。"""
         from scripts import manual
 
         try:
@@ -88,11 +123,9 @@ class TBApp(App):
             self._side_status(self.ctx_error)
             return
 
-        async def go():
-            return await manual.build_ctx(cfg, self.account, need_login=False)
-
         try:
-            self.ctx = asyncio.run(go())
+            self.ctx = self._cloud.submit(
+                manual.build_ctx(cfg, self.account, need_login=False)).result(30)
         except Exception as e:  # noqa: BLE001
             self.ctx_error = str(e)
             self._side_status(self.ctx_error)
@@ -124,15 +157,14 @@ class TBApp(App):
         self.notify(msg, severity="error" if error else "information")
 
     def on_unmount(self) -> None:
-        """退出时关 115 会话（独立线程里跑，不拖慢 TUI 关闭）。"""
+        """退出：在常驻循环上关 115 会话，然后停循环。"""
         ctx, self.ctx = self.ctx, None
-        if ctx is None:
-            return
-        import threading
-
-        def close() -> None:
-            asyncio.run(ctx.cloud.close())
-        threading.Thread(target=close, daemon=True).start()
+        try:
+            if ctx is not None:
+                self._cloud.submit(ctx.cloud.close()).result(10)
+        except Exception:  # noqa: BLE001 -- 关闭失败不影响退出
+            pass
+        self._cloud.stop()
 
 
 # ── 页面基类：定时器管理 ────────────────────────────────────────────────
@@ -213,9 +245,10 @@ class DashboardPage(Page):
                                      f"（阈值 {ctx.cloud.raw.daily_limit}）")
                     except Exception as e:  # noqa: BLE001
                         lines.append(f"☁️ 115          未授权或不可达（{e}）→ 去「授权」页扫码")
-                asyncio.run(go())
+                self.app._cloud.submit(go()).result(60)
+                self.app.call_from_thread(
+                    self.query_one("#dash", Static).update, "\n".join(lines))
             self.run_worker(fill, thread=True)
-        self.query_one("#dash", Static).update("\n".join(lines))
 
 
 # ── 文件浏览 ────────────────────────────────────────────────────────────
@@ -224,7 +257,6 @@ class FilesPage(Page):
     def __init__(self) -> None:
         super().__init__()
         self.path = "/tg115bot"
-        self._confirm_del: str | None = None
         self._confirm_key: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -241,8 +273,6 @@ class FilesPage(Page):
         self.load_dir()
 
     def load_dir(self) -> None:
-        from scripts import manual
-
         ctx = self.app_ctx
         if ctx is None:
             self.query_one("#files", DataTable).add_row("⚠️", self.app.ctx_error or "初始化中…", "")
@@ -250,33 +280,36 @@ class FilesPage(Page):
 
         def fill() -> None:
             from cloud115.filesystem import resolve_cid
-            from core.progress import human_bytes
+            from scripts.manual import (entry_is_dir, entry_name, entry_size,
+                                        sort_entries)
 
             async def go():
-                from scripts.manual import entry_is_dir, entry_name, entry_size, sort_entries
+                from core.progress import human_bytes
                 cid = await resolve_cid(ctx.cloud, self.path)
                 data = await ctx.cloud.raw.list_files(int(cid), limit=100)
                 items = sort_entries(data.get("list") or [])
-                rows = [("📂" if entry_is_dir(it) else "📄", entry_name(it),
-                         "" if entry_is_dir(it) else human_bytes(entry_size(it)),
-                         entry_name(it), entry_is_dir(it))
+                return [("📂" if entry_is_dir(it) else "📄", entry_name(it),
+                         "" if entry_is_dir(it) else human_bytes(entry_size(it)))
                         for it in items]
-                def apply() -> None:
-                    t = self.query_one("#files", DataTable)
-                    t.clear()
-                    t.add_row("📁", "..", "", "..", True)
-                    for r in rows:
-                        t.add_row(*r, key=r[3])
-                    self.query_one("#files-path", Static).update(self.path)
-                self.app.call_from_thread(apply)
+
+            def err(msg: str) -> None:
+                t = self.query_one("#files", DataTable)
+                t.clear()
+                t.add_row("⚠️", msg, "")
             try:
-                asyncio.run(go())
+                rows = self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001 -- 网络/授权问题不炸 worker
-                def err(msg: str) -> None:
-                    t = self.query_one("#files", DataTable)
-                    t.clear()
-                    t.add_row("⚠️", msg, "")
                 self.app.call_from_thread(err, f"加载失败: {e}")
+                return
+
+            def apply() -> None:
+                t = self.query_one("#files", DataTable)
+                t.clear()
+                t.add_row("📁", "..", "")
+                for r in rows:
+                    t.add_row(*r, key=r[1])
+                self.query_one("#files-path", Static).update(self.path)
+            self.app.call_from_thread(apply)
         self.run_worker(fill, thread=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -285,8 +318,8 @@ class FilesPage(Page):
         name = event.row_key.value
         row = self.query_one("#files", DataTable).get_row(event.row_key)
         if row and str(row[0]).startswith("📂"):
-            self.path = self.path.rstrip("/") + "/" + name if name != ".." \
-                else str(Path(self.path).parent)
+            self.path = (self.path.rstrip("/") + "/" + name if name != ".."
+                         else str(Path(self.path).parent))
             self.load_dir()
 
     def on_key(self, event) -> None:  # noqa: BLE001
@@ -296,8 +329,6 @@ class FilesPage(Page):
             self._try_delete()
 
     def _try_delete(self) -> None:
-        from scripts import manual
-
         ctx = self.app_ctx
         t = self.query_one("#files", DataTable)
         if ctx is None or t.cursor_row is None or t.cursor_row < 0:
@@ -314,12 +345,13 @@ class FilesPage(Page):
 
             def fill() -> None:
                 from cloud115.filesystem import find_entry
+                from scripts.manual import entry_fid
 
                 async def go():
                     entry = await find_entry(ctx.cloud, self.path.rstrip("/") + "/" + name)
-                    await ctx.cloud.raw.delete_files([manual.entry_fid(entry)])
+                    await ctx.cloud.raw.delete_files([entry_fid(entry)])
                     ctx.cloud.raw.invalidate_path_cache()
-                asyncio.run(go())
+                self.app._cloud.submit(go()).result(60)
                 self.app.call_from_thread(self.load_dir)
             self.run_worker(fill, thread=True)
             self.app.notify_user(f"🗑 已删除 {name}（回收站可恢复）")
@@ -334,7 +366,6 @@ class FilesPage(Page):
         if not src:
             return
         event.input.value = ""
-        from scripts import manual
         ctx = self.app_ctx
         if ctx is None:
             self.app.notify_user("115 未就绪", error=True)
@@ -342,11 +373,12 @@ class FilesPage(Page):
 
         def up() -> None:
             from core.uploader import upload_to_dir
+            from scripts import manual
 
             async def go():
                 files, bases, missing = manual.expand_sources([src])
                 for m in missing:
-                    print(m)
+                    self.app.call_from_thread(self.app.notify_user, f"❌ {m}", True)
                 for f in files:
                     rel = f.relative_to(bases[f]).parent
                     remote = (self.path.rstrip("/")
@@ -357,7 +389,7 @@ class FilesPage(Page):
                     self.app.call_from_thread(
                         self.app.notify_user, f"✅ {f.name} ({result.method})")
             try:
-                asyncio.run(go())
+                self.app._cloud.submit(go()).result()
             except Exception as e:  # noqa: BLE001
                 self.app.call_from_thread(self.app.notify_user, f"上传失败: {e}", True)
         self.run_worker(up, thread=True)
@@ -390,23 +422,23 @@ class OfflinePage(Page):
 
             async def go():
                 tasks = await ctx.cloud.raw.offline_list_all()
-                rows = []
-                for tk in tasks:
-                    st = tk.get("status")
-                    rows.append((OFFLINE_ICON.get(st, "•"),
-                                 tk.get("name") or (tk.get("url") or "?")[:50],
-                                 f"{tk.get('percentDone', 0)}%" if st == 1 else "",
-                                 str(tk.get("info_hash") or "")[:12]))
-                def apply() -> None:
-                    t = self.query_one("#off-t", DataTable)
-                    t.clear()
-                    for r in rows:
-                        t.add_row(*r)
-                self.app.call_from_thread(apply)
+                return [(OFFLINE_ICON.get(tk.get("status"), "•"),
+                         tk.get("name") or (tk.get("url") or "?")[:50],
+                         f"{tk.get('percentDone', 0)}%" if tk.get("status") == 1 else "",
+                         str(tk.get("info_hash") or "")[:12])
+                        for tk in tasks]
+
+            def apply(rows) -> None:
+                t = self.query_one("#off-t", DataTable)
+                t.clear()
+                for r in rows:
+                    t.add_row(*r)
             try:
-                asyncio.run(go())
+                rows = self.app._cloud.submit(go()).result(120)
             except Exception as e:  # noqa: BLE001
                 self.app.call_from_thread(self.app.notify_user, f"离线列表加载失败: {e}", True)
+                return
+            self.app.call_from_thread(apply, rows)
         self.run_worker(fill, thread=True)
 
     def on_key(self, event) -> None:  # noqa: BLE001
@@ -431,7 +463,7 @@ class OfflinePage(Page):
         def fill() -> None:
             async def go():
                 await ctx.cloud.raw.offline_del(ih, del_source_file=1)
-            asyncio.run(go())
+            self.app._cloud.submit(go()).result(60)
             self.app.call_from_thread(self.refresh_list)
         self.run_worker(fill, thread=True)
         self.app.notify_user(f"🗑 已删离线任务 {ih}…")
@@ -452,7 +484,7 @@ class OfflinePage(Page):
         def fill() -> None:
             async def go():
                 await ctx.cloud.raw.offline_add(url, save)
-            asyncio.run(go())
+            self.app._cloud.submit(go()).result(60)
             self.app.call_from_thread(self.refresh_list)
         self.run_worker(fill, thread=True)
         self.app.notify_user("已提交离线任务")
@@ -521,7 +553,7 @@ class AuthPage(Page):
                 api = ctx.cloud.raw
                 qr = await api.start_qr_auth()
                 self.app.call_from_thread(static.update,
-                                      _qr_ascii(qr["qrcode"]) + "\n请用 115 APP 扫描…")
+                                          _qr_ascii(qr["qrcode"]) + "\n请用 115 APP 扫描…")
                 await asyncio.sleep(5)
                 while True:
                     st = await api.poll_qr_status(qr["uid"], qr["time"], qr["sign"])
@@ -538,12 +570,13 @@ class AuthPage(Page):
                         return
                     await asyncio.sleep(3)
             try:
-                asyncio.run(go())
+                self.app._cloud.submit(go()).result()
             except Exception as e:  # noqa: BLE001
                 self.app.call_from_thread(static.update, f"❌ 授权失败: {e}")
             finally:
-                self.app.call_from_thread(
-                    lambda: setattr(self.query_one("#auth-btn", Button), "disabled", False))
+                def enable() -> None:
+                    self.query_one("#auth-btn", Button).disabled = False
+                self.app.call_from_thread(enable)
         self.run_worker(flow, thread=True)
 
 

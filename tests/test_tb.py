@@ -123,6 +123,45 @@ def test_cli_help_and_version():
     assert r.exit_code == 0 and "add" in r.output and "del" in r.output
 
 
+def test_cloud_loop_single_loop_for_session():
+    """回归：aiohttp 会话必须在创建它的同一循环上使用。
+
+    旧 bug：ctx 在某次 asyncio.run() 的临时循环上创建（循环随即关闭），页面
+    worker 再用新临时循环发请求 → 连环 "Event loop is closed"。
+    _CloudLoop 常驻循环下两次 submit 共用一个循环 → 不再出现该错误。
+    """
+    import aiohttp
+    from tb.tui import _CloudLoop
+
+    async def _make():
+        return aiohttp.ClientSession()
+
+    async def _hit(s):
+        try:
+            async with s.get("http://127.0.0.1:9/"):
+                pass
+            return "ok"
+        except RuntimeError as e:
+            return f"runtime:{e}"        # Event loop is closed 会落在这里（先判）
+        except Exception:
+            return "client-error"        # 连接拒绝等——请求调度路径已走通
+
+    cl = _CloudLoop()
+    try:
+        sess = cl.submit(_make()).result(10)
+        r1 = cl.submit(_hit(sess)).result(10)
+        r2 = cl.submit(_hit(sess)).result(10)   # 再来一次，覆盖多次提交
+        assert not r1.startswith("runtime"), r1
+        assert not r2.startswith("runtime"), r2
+
+        async def _close():
+            if hasattr(sess, "close"):        # 桩环境的假 session 没有 close
+                await sess.close()
+        cl.submit(_close()).result(5)
+    finally:
+        cl.stop()
+
+
 def test_tui_app_headless():
     """Textual 无头启动：组合/翻页不炸（数据层不可用时应优雅降级）。"""
     import asyncio
