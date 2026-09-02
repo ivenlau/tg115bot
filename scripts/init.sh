@@ -138,6 +138,28 @@ mihomo_port() {
   echo "${p:-7890}"
 }
 
+# 安全校验：代理端口若监听公网，必须有源 IP 白名单；控制 API 只准本机。
+# 背景：订阅配置常自带 allow-lan，公网服务器上等于开放代理，会被扫描器
+# 滥用（刷流量/中转垃圾邮件，曾导致整机资源耗尽——2026-09 阿里云实案）
+mihomo_security_check() {  # mihomo_security_check <端口>
+  local cfg=/etc/mihomo/config.yaml port=$1 ctrl listen
+  [[ -f $cfg ]] || return 0
+  ctrl=$(grep -E '^external-controller:' "$cfg" | head -1 | awk '{print $2}' | tr -d "'\"" || true)
+  if [[ -n $ctrl && $ctrl != 127.0.0.1:* && $ctrl != localhost:* ]]; then
+    warn "mihomo 控制 API 绑定在 $ctrl —— 公网可远程改你的代理配置！"
+    warn "修复: $cfg 里把 external-controller 改为 127.0.0.1:9090 后 systemctl restart mihomo"
+  fi
+  command -v ss >/dev/null 2>&1 || return 0
+  listen=$(ss -tln 2>/dev/null | awk -v p=":$port"'$' '$4 ~ p {print $4}' | head -1) || true
+  if [[ -n $listen && $listen != 127.0.0.1:* && $listen != localhost* && $listen != \[::1\]* ]]; then
+    if ! grep -qE '^lan-allowed-ips:' "$cfg" \
+       || grep -A5 -E '^lan-allowed-ips:' "$cfg" | grep -q '0\.0\.0\.0/0'; then
+      warn "mihomo 代理端口监听 $listen 且缺源 IP 白名单 —— 公网开放代理，会被扫描滥用！"
+      warn "修复: 重跑 sudo scripts/setup-mihomo.sh <订阅>（自动写入安全加固，不影响 Docker）"
+    fi
+  fi
+}
+
 # 穿代理实测 TG 可达：拿到任意 HTTP 状态码即证明隧道通（000 = 连不上/超时）。
 # 只看"服务在跑"会漏掉订阅过期、节点全挂——那种 proxy 写进去 TG 也连不上
 tg_proxy_ok() {  # tg_proxy_ok <proxy-url>
@@ -160,6 +182,7 @@ elif command -v mihomo >/dev/null 2>&1 && systemctl is-active --quiet mihomo 2>/
   PORT=$(mihomo_port)
   TG_PROXY="http://127.0.0.1:$PORT"
   info "mihomo 已在运行（端口 $PORT）"
+  mihomo_security_check "$PORT"
   if ! command -v curl >/dev/null 2>&1; then
     warn "缺少 curl，跳过穿代理实测"
   elif tg_proxy_ok "$TG_PROXY"; then

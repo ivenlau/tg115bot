@@ -178,6 +178,38 @@ mv "$NEW" "$CONFIG"
 chmod 600 "$CONFIG"
 info "配置已就位: $CONFIG"
 
+# ---------- 安全加固：防公网滥用 ----------
+# 订阅配置可能自带 allow-lan / 0.0.0.0 绑定——公网服务器上等于开放代理，
+# 会被扫描器滥用（刷流量/中转垃圾邮件，见 README「安全须知」）。
+# 强制覆写：代理端口源 IP 白名单只放 本机/内网/docker 网段（容器经
+# host.docker.internal 的来源在 172.16/12 内，Docker 部署不受影响）；
+# 控制 API 只听本机。公网云服务器仍应配合安全组关闭 7890/9090 入方向。
+harden_config() {  # harden_config <config.yaml>
+  local f=$1
+  # 先删旧键（含列表键的缩进续行），避免顶层键重复导致 mihomo 校验失败
+  awk '
+    /^(allow-lan|bind-address|external-controller|lan-allowed-ips|lan-disallowed-ips):([[:space:]]|$)/ { skip=1; next }
+    /^[^[:space:]#]/ { skip=0 }
+    !skip
+  ' "$f" > "$f.hard" && mv "$f.hard" "$f"
+  cat >> "$f" <<'HARDEN'
+
+# ── tg115bot 安全加固（setup-mihomo.sh 写入，勿删）──
+# 源 IP 白名单：仅本机/内网/docker 网段可用代理端口，公网来源一律拒绝
+allow-lan: true
+bind-address: "*"
+lan-allowed-ips:
+  - 127.0.0.0/8
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+# 控制 API 仅本机（远程访问面板请走 SSH 隧道）
+external-controller: 127.0.0.1:9090
+HARDEN
+}
+harden_config "$CONFIG"
+info "安全加固已写入：源 IP 白名单（本机/内网/docker 网段）+ 控制 API 仅本机"
+
 # ---------- GeoIP / GeoSite 数据库 ----------
 # GitHub 直连常超时，优先走 jsDelivr 镜像
 geo_fetch() {  # geo_fetch <文件名>
@@ -229,6 +261,6 @@ else
   warn "连通性: 未通过 (HTTP $CODE)，服务已启动，可稍后手动测试"
 fi
 [[ -n $EXIT_IP ]] && echo "  出口 IP: $EXIT_IP"
-[[ -n $CTRL ]] && echo "  管理面板: 浏览器打开 https://d.metacubex.one ，填入 $CTRL"
+[[ -n $CTRL ]] && echo "  管理面板: 浏览器打开 https://d.metacubex.one ，填入 $CTRL（仅本机监听，远程先 SSH 隧道转发 9090）"
 echo "  配置文件: $CONFIG"
 echo "=========================================="
