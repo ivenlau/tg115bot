@@ -86,6 +86,8 @@ class TBApp(App):
     #content { padding: 1 2; height: 1fr; }
     .page-title { text-style: bold; color: $text; margin-bottom: 1; }
     .hint { color: $text-muted; margin-top: 1; }
+    .hidden { display: none; }
+    #dl-status { color: $text-muted; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; }
     """
@@ -258,6 +260,7 @@ class FilesPage(Page):
         super().__init__()
         self.path = "/tg115bot"
         self._confirm_key: str | None = None
+        self._dl_pending: str | None = None
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
     def compose(self) -> ComposeResult:
@@ -266,11 +269,15 @@ class FilesPage(Page):
         yield DataTable(id="files", cursor_type="row", zebra_stripes=True)
         yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
                     id="upload-input")
-        yield Label("回车=进入目录 · d=删除(两次确认) · r=刷新 · 底部输入框=上传", classes="hint")
+        yield Input(placeholder=f"下载到本地目录（回车开始，Esc 取消）",
+                    id="dl-input", classes="hidden")
+        yield Static("", id="dl-status", classes="hidden")
+        yield Label("回车=进入目录 · d=删除(两次确认) · s=下载选中 · r=刷新 · 输入框=上传", classes="hint")
 
     def on_mount(self) -> None:
         t = self.query_one("#files", DataTable)
         t.add_columns("类型", "名称", "大小")
+        t.focus()          # 键盘优先：挂载即聚焦表格，r/d/s 立即可用
         self.load_dir()
 
     def load_dir(self) -> None:
@@ -339,6 +346,99 @@ class FilesPage(Page):
             self.load_dir()
         elif event.key == "d":
             self._try_delete()
+        elif event.key == "s":
+            self._start_download()
+        elif event.key == "escape":
+            self._cancel_download()
+
+    # ── 下载（s 键）：选文件 → 弹本地目录输入 → 常驻循环上走直链+sha1 ─────
+
+    def _start_download(self) -> None:
+        t = self.query_one("#files", DataTable)
+        if t.cursor_row is None or t.cursor_row < 0:
+            return
+        try:
+            row = t.get_row_at(t.cursor_row)
+        except Exception:  # noqa: BLE001
+            return
+        name = str(row[1])
+        if name == "..":
+            return
+        if str(row[0]).startswith("📂"):
+            self.app.notify_user("目录下载 v1 不支持（逐文件取直链会快速烧 API 配额），请对单文件", True)
+            return
+        self._dl_pending = name
+        inp = self.query_one("#dl-input", Input)
+        inp.remove_class("hidden")
+        self.call_after_refresh(inp.focus)
+
+    def _cancel_download(self) -> None:
+        self._dl_pending = None
+        try:
+            self.query_one("#dl-input", Input).add_class("hidden")
+            self.query_one("#files", DataTable).focus()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _download(self, name: str, dest_dir: Path) -> None:
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        status = self.query_one("#dl-status", Static)
+        status.remove_class("hidden")
+        full = self.path.rstrip("/") + "/" + name
+        status.update(f"⬇️ {name}  准备中…")
+        last = [0.0]
+
+        def on_progress(written: int, total: int) -> None:
+            now = time.monotonic()
+            if now - last[0] < 1.0 and written != total:
+                return
+            last[0] = now
+            from core.progress import human_bytes
+            pct = f" {written * 100 // total}%" if total else ""
+            self.app.call_from_thread(status.update,
+                                      f"⬇️ {name}  {human_bytes(written)}{pct}")
+
+        def dl() -> None:
+            from cloud115.download import (download_file, parse_downurl,
+                                           sanitize_name, unique_dest)
+            from cloud115.filesystem import find_entry
+            from core.progress import human_bytes
+            from scripts.manual import entry_name
+
+            async def go():
+                entry = await find_entry(ctx.cloud, full)
+                pc = str(entry.get("pc") or "")
+                if not pc:
+                    raise RuntimeError("条目缺 pickcode，无法取直链")
+                info = parse_downurl(await ctx.cloud.raw.get_download_url(pc))
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = unique_dest(dest_dir,
+                                   sanitize_name(info["file_name"] or entry_name(entry)))
+                size, sha1 = await download_file(info["url"], dest,
+                                                 expected_size=info["file_size"],
+                                                 on_progress=on_progress)
+                return info, dest, size, sha1
+
+            try:
+                info, dest, size, sha1 = self.app._cloud.submit(go()).result()
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(status.update, f"❌ 下载失败: {e}")
+                self.app.call_from_thread(self.app.notify_user, f"下载失败: {e}", True)
+                return
+            part = dest.with_name(dest.name + ".part")
+            if info.get("sha1") and sha1 != info["sha1"]:
+                self.app.call_from_thread(
+                    status.update, f"❌ SHA1 不符，现场保留: {part.name}")
+                self.app.call_from_thread(self.app.notify_user, "SHA1 不符，已保留 .part", True)
+                return
+            part.rename(dest)
+            self.app.call_from_thread(
+                status.update, f"✅ {dest.name}  {human_bytes(size)}  ->  {dest}")
+            self.app.call_from_thread(self.app.notify_user, f"✅ 已下载到 {dest}")
+        self.run_worker(dl, thread=True)
 
     def _try_delete(self) -> None:
         ctx = self.app_ctx
@@ -372,6 +472,13 @@ class FilesPage(Page):
             self.app.notify_user(f"再按一次 d 确认删除: {name}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "dl-input":
+            raw = event.value.strip()
+            name = self._dl_pending
+            self._cancel_download()
+            if raw and name:
+                self._download(name, Path(raw).expanduser())
+            return
         if event.input.id != "upload-input":
             return
         src = event.value.strip()
@@ -421,6 +528,7 @@ class OfflinePage(Page):
     def on_mount(self) -> None:
         t = self.query_one("#off-t", DataTable)
         t.add_columns("状态", "名称", "进度", "info_hash")
+        t.focus()          # 键盘优先：挂载即聚焦表格，r/d 立即可用
         self.every(30, self.refresh_list)
         self.refresh_list()
 

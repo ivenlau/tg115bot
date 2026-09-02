@@ -187,6 +187,34 @@ def test_files_page_duplicate_names_ok():
     asyncio.run(go())
 
 
+def test_files_page_download_ui():
+    """下载交互：s 键弹出本地目录输入框，Esc 收起（数据层不触网）。"""
+    import asyncio
+    from tb.tui import TBApp
+
+    async def go():
+        app = TBApp()
+        async with app.run_test(size=(110, 32)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one("#nav").index = 1      # -> 文件页
+            await pilot.pause(0.5)
+            page = app.query_one("#content FilesPage")
+            t = page.query_one("#files")
+            t.clear()
+            t.add_row("📄", "a.mkv", "1G")
+            t.move_cursor(row=0)
+            t.focus()
+            dl = page.query_one("#dl-input")
+            assert dl.has_class("hidden")
+            await pilot.press("s")
+            await pilot.pause(0.2)
+            assert not dl.has_class("hidden"), "s 应弹出下载输入框"
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert dl.has_class("hidden"), "Esc 应收起下载输入框"
+    asyncio.run(go())
+
+
 def test_tui_app_headless():
     """Textual 无头启动：组合/翻页不炸（数据层不可用时应优雅降级）。"""
     import asyncio
