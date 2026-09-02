@@ -14,6 +14,8 @@
 #   - 自动使用项目目录下的 .venv（不存在则提示先跑 init.ps1）
 #   - 开机自启：任务计划程序 schtasks /Create /SC ONSTART /TN tg115bot /
 #       TR "powershell -ExecutionPolicy Bypass -File <本项目>\scripts\service.ps1 start"
+#   - 兼容 Windows PowerShell 5.1 与 PowerShell 7（stdout.log 读写均为显式 UTF-8，
+#     生成的 .cmd 按系统 OEM 代码页写入）
 #
 #Requires -Version 5.1
 # 不用 "Stop"：taskkill 对不存在的 PID 写 stderr，PS 5.1 下配 Stop 会被
@@ -83,7 +85,10 @@ function Do-Start {
     # $proc 是 cmd 的 PID，python 是其子进程——stop 时 /T 结束整棵树。
     $runnerCmd = Join-Path $Dir "run\tg115bot-run.cmd"
     $redirects = "@echo off`r`n`"$Python`" main.py >> `"$StdoutLog`" 2>&1"
-    [IO.File]::WriteAllText($runnerCmd, $redirects, [Text.Encoding]::Default)
+    # .cmd 由 cmd.exe 按系统 OEM 代码页解析；PS 5.1 的 Encoding.Default=ANSI(GBK)、
+    # PS 7 恒为 UTF-8——显式取 OEM 代码页，两版写入一致（项目路径含中文也正确）
+    $oem = [Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage
+    [IO.File]::WriteAllText($runnerCmd, $redirects, [Text.Encoding]::GetEncoding($oem))
     $proc = Start-Process -FilePath "$env:ComSpec" -ArgumentList "/c", "`"$runnerCmd`"" `
         -WorkingDirectory $Dir -WindowStyle Hidden -PassThru
     $procId = $proc.Id
@@ -93,7 +98,7 @@ function Do-Start {
         Remove-Item $PidFile -ErrorAction SilentlyContinue
         $tail = ""
         if (Test-Path $StdoutLog) {
-            $tail = (Get-Content $StdoutLog -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
+            $tail = (Get-Content $StdoutLog -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -Last 15) -join "`n"
         }
         Die "启动失败，最近日志：`n$tail"
     }
@@ -101,7 +106,7 @@ function Do-Start {
     Info "日志: .\scripts\service.ps1 log"
     Write-Host "---- 启动日志 ----"
     if (Test-Path $StdoutLog) {
-        Get-Content $StdoutLog -Tail 8 | ForEach-Object { "    $_" }
+        Get-Content $StdoutLog -Tail 8 -Encoding UTF8 | ForEach-Object { "    $_" }
     }
 }
 
@@ -153,7 +158,9 @@ function Do-Log([int]$Tail = 50) {
     if (-not (Test-Path $StdoutLog)) { Die "日志不存在: $StdoutLog" }
     Info "跟踪 $StdoutLog （Ctrl+C 退出）"
     # -Wait 即 Windows 版 tail -f（PowerShell 5.1 起）
-    Get-Content $StdoutLog -Tail $Tail -Wait
+    # stdout.log 由 main.py 强制写 UTF-8（见 _force_utf8_stdio）；PS 7 默认 UTF-8
+    # 恰好一致，PS 5.1 默认 ANSI 会乱码 -> 显式指定，两版统一
+    Get-Content $StdoutLog -Tail $Tail -Wait -Encoding UTF8
 }
 
 switch ($args[0]) {

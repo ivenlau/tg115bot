@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from config import load_config
 from utils.logging import setup_logging, log_drainer
@@ -22,6 +23,21 @@ from bot.channel_monitor import ChannelMonitor
 from persistence.db import Database
 
 log = logging.getLogger("tg115bot")
+
+
+def _force_utf8_stdio() -> None:
+    """stdout/stderr 重定向到文件时强制 UTF-8。
+
+    Windows 上 Python 重定向输出默认跟 locale 走（中文系统=GBK），而 PowerShell 7
+    的 Get-Content 默认按 UTF-8 读 -> 乱码；PS 5.1 又只认 ANSI。统一写 UTF-8，
+    两版读端显式 -Encoding UTF8 即全对齐。控制台直跑不受影响。
+    """
+    for s in (sys.stdout, sys.stderr):
+        try:
+            if not s.isatty() and s.encoding.lower().replace("-", "") != "utf8":
+                s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
 
 async def _start_web(cfg) -> tuple | None:
@@ -42,6 +58,7 @@ async def _start_web(cfg) -> tuple | None:
 
 
 async def main() -> None:
+    _force_utf8_stdio()
     cfg = load_config()
     db_log_handler = setup_logging(cfg)
     state.config = cfg
