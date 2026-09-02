@@ -21,6 +21,7 @@ MODULES = [
     "tests.test_db",
     "tests.test_oss_protocol",
     "tests.test_manual_tools",
+    "tests.test_tb",
 ]
 
 

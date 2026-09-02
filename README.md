@@ -4,6 +4,7 @@
 
 ## 特性
 
+- **tb 统一命令行**：一行命令安装；`tb` 收拢全部功能（服务/初始化/体检/115 操作），裸 `tb` 进交互 TUI，Linux / Windows 通用
 - **MTProto 大文件下载**：多路并行分片（`stream_media` × N 路），绕过 Bot API 20MB 限制；bot 单文件可达 2GB，配置 user session（Premium 账号）可达 4GB
 - **秒传优先**：服务端 SHA1 去重，命中即秒级落地，跳过整个上传阶段
 - **OSS 直传**：秒传未命中时走阿里云 OSS 分片上传（V1 签名，含二次区间校验）
@@ -32,14 +33,30 @@ TG 消息 → bot/handlers → core/queue → core/pipeline
 
 ## 快速开始
 
-### 一键初始化
+### 一键安装（推荐）
+
+Linux / macOS：
 
 ```bash
-git clone https://github.com/ivenlau/tg115bot.git && cd tg115bot
-./scripts/init.sh
+curl -fsSL https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.sh | bash
 ```
 
-交互式完成 7 步（幂等，重跑安全，已就绪的自动跳过）：
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 | iex
+```
+
+装完即有 `tb` 命令：
+
+```bash
+tb init      # 首次配置（依赖/代理/扫码授权，交互式，幂等可重跑）
+tb doctor    # 一键体检：环境/授权/磁盘/代理安全/服务
+tb start     # 启动服务
+tb           # 进交互 TUI；tb --help 看全部命令
+```
+
+`tb init` 交互式完成 7 步（幂等，重跑安全，已就绪的自动跳过）：
 
 | 步骤 | 内容 | 智能行为 |
 |---|---|---|
@@ -54,21 +71,34 @@ git clone https://github.com/ivenlau/tg115bot.git && cd tg115bot
 初始化完成后：
 
 ```bash
-./scripts/service.sh start
+tb start          # 源码克隆安装时等价：./scripts/service.sh start
 ```
+
+### tb 命令一览
+
+| 分类 | 命令 |
+|---|---|
+| 服务 | `tb start / stop / restart / status / log [N]` |
+| 运维 | `tb init / doctor / mihomo <订阅> / session / update / version` |
+| 115 操作 | `tb ls / info / search / upload / download / offline add·list·del / rm / mv / mkdir / rename / df / share save / auth` |
+| 交互 | 裸 `tb` 进 TUI（仪表盘/文件/离线任务/日志/扫码授权）；`tb menu` 进 Rich 菜单（`TB_TUI=0` 设为默认） |
+| 全局 | `-a, --account <名>` 选 115 账号；`tb --install-completion` 装 shell 补全 |
+
+CLI 与 `scripts/manual.py` 子命令同构（tb 是其统一入口），参数完全一致；TUI 与 CLI 共用同一数据层，行为一致。
 
 ### 服务管理
 
 ```bash
-./scripts/service.sh start      # 后台启动（nohup，SSH 断开不影响）
-./scripts/service.sh stop       # 优雅停止（进行中上传会收尾，10s 后强杀）
-./scripts/service.sh restart    # 重启（更新代码/改配置后用这个）
-./scripts/service.sh status     # 状态：PID / 内存 / 运行时长
-./scripts/service.sh log [N]    # 跟踪日志（默认尾部 50 行）
+tb start       # 后台启动（关终端/SSH 断开不影响）
+tb stop        # 优雅停止（10s 后强杀进程树）
+tb restart     # 重启（更新代码/改配置后用这个）
+tb status      # 状态：PID / 内存 / 运行时长
+tb log [N]     # 跟踪日志（默认尾部 50 行，Ctrl+C 退出）
 ```
 
-- PID 文件防重复启动（校验进程身份，防 PID 复用误杀）
+- PID 文件防重复启动（校验进程命令行，防 PID 复用误杀）
 - 双日志：`logs/stdout.log`（运行输出）+ `logs/tg115bot.log`（业务日志，10MB 轮转）
+- 更新：`tb update`（git pull + 依赖刷新）后 `tb restart`
 
 ### 代理订阅更新
 
@@ -84,10 +114,12 @@ sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实�
 Windows 版不做代理部署——自行安装 Clash/v2rayN 等系统代理软件，初始化时把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy` 即可。
 
 ```powershell
-git clone https://github.com/ivenlau/tg115bot.git; cd tg115bot
-powershell -ExecutionPolicy Bypass -File scripts\init.ps1     # 初始化（6 步，含可选开始菜单快捷方式）
-.\scripts\service.ps1 start                                    # 启动
+irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 | iex
+tb init        # 初始化（6 步，含可选开始菜单快捷方式）
+tb start       # 启动
 ```
+
+或源码方式：`git clone` 后 `powershell -ExecutionPolicy Bypass -File scripts\init.ps1` / `.\scripts\service.ps1 start`。
 
 服务管理与 Linux 版同构（`start / stop / restart / status / log [N]`）：
 
@@ -169,9 +201,9 @@ python main.py
 | `/dl <http直链>` | 本地中转下载后上传 |
 | `/ai` `/aireset` `/aitools` | AI 模式开关 / 清空记忆 / 管理动态工具 |
 
-### 命令行手动运维（scripts/manual.py）
+### 命令行手动运维（`tb <子命令>`，等价 scripts/manual.py）
 
-不依赖 Telegram，直接在服务器/本机操作 115：**无参数运行进交互菜单**，带子命令则一次性执行（可 cron/脚本编排）。未授权先跑 `python scripts/check115.py --auth`。
+不依赖 Telegram，直接在服务器/本机操作 115。**推荐用 `tb`**（如 `tb ls /tg115bot`、`tb upload /data/photos -d /tg115bot/photos`）；以下 `python scripts/manual.py` 形式完全等价，适合在安装目录直接跑：**无参数运行进交互菜单**，带子命令则一次性执行（可 cron/脚本编排）。未授权先跑 `tb auth`。
 
 ```bash
 python scripts/manual.py                          # 交互菜单（编号选择，循环操作）
@@ -283,6 +315,7 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 tg115bot/
 ├── main.py                # 入口
 ├── config.py              # 配置加载（yaml + 环境变量覆盖）
+├── tb/                    # 统一命令行包：CLI（Typer）+ TUI（Textual）+ 跨平台服务管理
 ├── bot/                   # TG 客户端、命令处理、频道监控
 ├── core/                  # 下载/上传/离线/RSS/备份/直链/队列/整理
 ├── ai/                    # AI 助手：LLM 客户端/工具集/agent 循环/动态工具沙箱
@@ -292,14 +325,16 @@ tg115bot/
 ├── utils/                 # 限速/退避、凭据加密、日志
 ├── tests/                 # 单元测试（python tests/run_all.py）
 └── scripts/
+    ├── install.sh         # 一键安装（curl | bash；克隆+venv+tb shim）
+    ├── install.ps1        # Windows 一键安装（irm | iex）
     ├── init.sh            # 交互式初始化（依赖/代理/配置/授权 7 步）
     ├── service.sh         # 服务管理（start/stop/restart/status/log）
-    ├── setup-mihomo.sh    # mihomo 代理部署/订阅更新
+    ├── setup-mihomo.sh    # mihomo 代理部署/订阅更新（含安全加固）
     ├── init.ps1           # Windows 版初始化（不含代理部署）
     ├── service.ps1        # Windows 版服务管理
     ├── menu.ps1           # Windows 快捷管理菜单
     ├── check115.py        # 115 授权与链路自检
-    ├── manual.py          # 115 手动运维 CLI（交互菜单 + 子命令）
+    ├── manual.py          # 115 手动运维 CLI（交互菜单 + 子命令；tb 的数据层）
     ├── make_session.py    # 生成 TG user session
     └── healthcheck.py     # 容器健康检查
 ```
