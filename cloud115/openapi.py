@@ -48,8 +48,9 @@ UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 # 令牌相关错误码（参考 telegram-115bot handle_token_expiry）
-CODE_TOKEN_EXPIRED = 40140125      # 可刷新后重试
-CODE_NEED_REAUTH = (40140116, 40140119)   # access_token 彻底失效，需重新扫码
+CODE_TOKEN_EXPIRED = 40140125      # access_token 过期，可刷新后重试
+CODE_TOKEN_INVALID = 40140126      # access_token 校验失败——通常是被其他进程的刷新吊销（单会话轮换）
+CODE_NEED_REAUTH = (40140116, 40140119)   # 授权已解除/不存在，需重新扫码
 
 
 class AuthRequiredError(RuntimeError):
@@ -77,6 +78,7 @@ class Open115Client:
         self._session: Optional[aiohttp.ClientSession] = None
         self.access_token = ""
         self.refresh_token = ""
+        self._token_mtime: float = 0.0    # 内存 token 对应的文件 mtime（跨进程刷新检测）
         self._path_cache: Dict[str, dict] = {}      # path -> file_info（脏缓存主动失效）
         self._last_code_ts = 0.0                    # 最近一次 proapi 调用时间（探活限速用）
         # 日请求计数（风控防御，对照 telegram-115bot：普通用户 10000/日，终身会员 15000）
@@ -110,14 +112,34 @@ class Open115Client:
 
     # ── token 持久化（可加密） ────────────────────────────────────────────
     def _load_token(self) -> None:
+        self._token_mtime = 0.0
         if not self.token_file.exists():
             return
         try:
             data = json.loads(self.token_file.read_text("utf-8"))
             self.access_token = decrypt_if_possible(str(data.get("access_token", "")), self._secret_key)
             self.refresh_token = decrypt_if_possible(str(data.get("refresh_token", "")), self._secret_key)
+            self._token_mtime = self.token_file.stat().st_mtime
         except Exception as e:  # noqa: BLE001
             log.warning("读取 token 文件失败 %s: %r", self.token_file, e)
+
+    def _reload_token_if_disk_newer(self) -> bool:
+        """磁盘 token 是否比内存新（其他进程刷新过）。
+
+        bot 与 tb/TUI 双进程共用 token 文件：任一方刷新都会轮换并吊销另一方
+        内存里的 token（115 单会话语义，失效形态 code=40140126）。此方法让
+        本进程直接捡起新 token，省一次刷新请求、也避免 refresh_token 已被
+        吊销导致的无谓失败。是则重载并返回 True。
+        """
+        try:
+            mtime = self.token_file.stat().st_mtime
+        except OSError:
+            return False
+        if mtime == self._token_mtime:
+            return False
+        old = self.access_token
+        self._load_token()
+        return bool(self.access_token) and self.access_token != old
 
     def _save_token(self) -> None:
         sk = self._secret_key
@@ -127,6 +149,10 @@ class Open115Client:
             "refresh_token": encrypt(self.refresh_token, sk) if sk else self.refresh_token,
             "saved_at": time.time(),
         }, ensure_ascii=False), "utf-8")
+        try:
+            self._token_mtime = self.token_file.stat().st_mtime   # 自己写的不算「别人更新」
+        except OSError:
+            pass
 
     def has_token(self) -> bool:
         return bool(self.access_token or self.refresh_token)
@@ -154,9 +180,22 @@ class Open115Client:
             return {"state": False, "code": r.status, "message": str(resp)[:200]}
 
         code = resp.get("code")
-        if auth and _retry and code == CODE_TOKEN_EXPIRED:
-            log.info("access_token 过期(40140125)，刷新后重试")
-            await self.refresh_access_token()
+        if auth and _retry and code in (CODE_TOKEN_EXPIRED, CODE_TOKEN_INVALID):
+            # 三段式恢复（bot 与 tb/TUI 双进程共用 token 文件的场景）：
+            # ①磁盘上有其他进程刚刷新的 token → 直接复用（本进程内存里的已被吊销，
+            #   自己刷新反而会因 refresh_token 被轮换而失败）
+            # ②磁盘没变 → 自己刷新（原 40140125 路径）
+            # ③刷新失败 → 再看一眼磁盘；仍没有 → 明确要求重新扫码
+            if self._reload_token_if_disk_newer():
+                log.info("token 已被其他进程刷新（磁盘更新），复用新 token 重试")
+            else:
+                log.info("access_token 失效(code=%s)，尝试刷新后重试", code)
+                if not await self.refresh_access_token():
+                    if self._reload_token_if_disk_newer():
+                        log.info("刷新失败但磁盘上有其他进程的新 token，复用重试")
+                    else:
+                        raise AuthRequiredError(
+                            f"115 令牌失效(code={code})且刷新失败，请重新扫码授权（tb auth 或 TG 里 /auth）")
             return await self._request(method, url, params=params, data=data, auth=True, _retry=False)
         if auth and code in CODE_NEED_REAUTH:
             raise AuthRequiredError(f"115 令牌失效(code={code})，请 /auth 重新扫码授权")

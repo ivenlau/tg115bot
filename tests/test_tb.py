@@ -162,9 +162,43 @@ def test_cloud_loop_single_loop_for_session():
         cl.stop()
 
 
+def test_token_reload_if_disk_newer():
+    """跨进程 token 轮换检测（bot + tb/TUI 共用 token 文件场景）。
 
+    实案 2026-09-03：TUI 进程刷新 token 吊销了 bot 内存里的 token，bot 收到
+    40140126 直接失败。_reload_token_if_disk_newer 让 bot 捡起磁盘新 token。
+    """
+    import json
+    import os
+    from cloud115.openapi import Open115Client
+    from utils.rate import RateLimiter
 
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        f = tmp / "open_token_main.json"
+        f.write_text(json.dumps({"access_token": "A", "refresh_token": "R1"}),
+                     encoding="utf-8")
+        c = Open115Client(f, app_id=0, secret_key="", rate=RateLimiter(0))
+        c._load_token()
+        assert c.access_token == "A"
+        assert not c._reload_token_if_disk_newer()      # mtime 一致 -> 没人动过
 
+        # 模拟另一进程写新 token（内容 + mtime 都变）
+        f.write_text(json.dumps({"access_token": "B", "refresh_token": "R2"}),
+                     encoding="utf-8")
+        future = time.time_ns() + 10 ** 9
+        os.utime(f, ns=(future, future))
+        assert c._reload_token_if_disk_newer()          # 捡起新 token
+        assert c.access_token == "B" and c.refresh_token == "R2"
+        assert not c._reload_token_if_disk_newer()      # 已同步
+
+        # 自己写盘后 mtime 记账（不算「别人更新」）；文件消失不炸
+        c._save_token()
+        assert not c._reload_token_if_disk_newer()
+        f.unlink()
+        assert not c._reload_token_if_disk_newer()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 def test_config_edit_helpers():
     """validate/write/set_config_key：双重校验、备份、失败不落盘。"""
@@ -204,8 +238,6 @@ def test_config_edit_helpers():
         assert p.read_text(encoding="utf-8") == before
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
-
 
 
 if __name__ == "__main__":
