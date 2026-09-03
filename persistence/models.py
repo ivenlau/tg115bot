@@ -31,6 +31,7 @@ class TaskRow:
     target_dir: str = ""
     status: str = STATUS_QUEUED
     method: str = ""                # 秒传 | oss | fs.upload
+    progress: int = -1              # 0-100（downloading/uploading 实时节流落库；-1=未知/不适用）
     error: str = ""
     chat_id: int = 0
     message_id: int = 0

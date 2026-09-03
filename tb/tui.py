@@ -363,7 +363,10 @@ class DashboardPage(Page):
                 for r in rows:
                     tm = time.strftime("%m-%d %H:%M", time.localtime(r.created_at or 0))
                     icon = TASK_ICON.get(r.status, r.status)
+                    pct = getattr(r, "progress", -1)
                     st = f"{icon} {r.status}" if r.status in ("downloading", "uploading", "queued") else icon
+                    if r.status in ("downloading", "uploading") and 0 <= pct < 100:
+                        st += f" {pct}%"      # bot 侧节流落库的实时进度
                     via = (r.method or r.source or "").strip()
                     t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, via)
             _post(self.app, apply)

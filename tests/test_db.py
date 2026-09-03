@@ -86,6 +86,57 @@ def test_db_crud():
         run(_scoped(d))
 
 
+async def _progress_roundtrip(tmpdir):
+    db = Database(Path(tmpdir) / "t.db")
+    await db.init()
+    await db.insert_task(TaskRow(task_id="p1", user_id=1, filename="x.mkv", status="uploading"))
+    assert (await db.recent_tasks(5))[0].progress == -1       # 缺省未知
+    await db.update_task("p1", progress=42)
+    assert (await db.recent_tasks(5))[0].progress == 42       # 落库读回
+    await db.update_task("p1", status="done", method="oss", progress=100)
+    row = (await db.recent_tasks(5))[0]
+    assert row.status == "done" and row.progress == 100
+    await db.close()
+
+
+async def _progress_migration(tmpdir):
+    """旧库（tasks 无 progress 列）打开即自动迁移。"""
+    import aiosqlite as _a
+    p = Path(tmpdir) / "old.db"
+    old_schema = """
+    CREATE TABLE tasks (
+        task_id TEXT PRIMARY KEY, user_id INTEGER, source TEXT, filename TEXT,
+        size INTEGER, target_dir TEXT, status TEXT, method TEXT, error TEXT,
+        chat_id INTEGER, message_id INTEGER, channel_id INTEGER,
+        created_at REAL, updated_at REAL
+    )"""
+    async with _a.connect(str(p)) as c:
+        await c.execute(old_schema)
+        await c.execute(
+            "INSERT INTO tasks(task_id,user_id,source,filename,size,target_dir,status,"
+            "method,error,chat_id,message_id,channel_id,created_at,updated_at) "
+            "VALUES('old1',1,'manual','a.mp4',1,'/t','done','oss','',0,0,0,1,1)")
+        await c.commit()
+    db = Database(p)
+    await db.init()                                            # 触发 ALTER 迁移
+    rows = await db.recent_tasks(5)
+    assert len(rows) == 1 and rows[0].task_id == "old1"
+    assert rows[0].progress == -1                              # 迁移列缺省 -1
+    await db.update_task("old1", progress=7)                   # 迁移后可写
+    assert (await db.recent_tasks(5))[0].progress == 7
+    await db.close()
+
+
+def test_db_task_progress():
+    if not HAVE_AIOSQLITE:
+        print("  skip: aiosqlite 未安装（sandbox 预期）")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        run(_progress_roundtrip(d))
+    with tempfile.TemporaryDirectory() as d:
+        run(_progress_migration(d))
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

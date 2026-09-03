@@ -23,6 +23,29 @@ from persistence.models import (
 log = logging.getLogger(__name__)
 
 
+def make_db_progress(task, base_cb=None, refresh: float = 3.0, clock=time.monotonic,
+                     update=None):
+    """复合进度回调：base_cb（TG 跟踪消息编辑）+ 节流落库（TUI 仪表盘实时百分比）。
+
+    落库条件：距上次 ≥refresh 秒，或已到终点——大文件回调每秒多次，绝不每次
+    都写。DB 写失败静默（进度落库不能影响任务本身）。update 可注入（测试）。
+    """
+    last = [0.0]
+    do_update = update or _update
+
+    async def cb(cur: int, total: int) -> None:
+        if base_cb is not None:
+            await base_cb(cur, total)
+        now = clock()
+        if total and (now - last[0] >= refresh or cur >= total):
+            last[0] = now
+            try:
+                await do_update(task, progress=max(0, min(100, cur * 100 // total)))
+            except Exception:  # noqa: BLE001
+                pass
+    return cb
+
+
 async def _persist(task: Task, status: str, **kw) -> None:
     if state.db is None:
         return
@@ -100,20 +123,20 @@ async def run_task(task: Task) -> None:
         reporter.set_total(task.size)
 
         await reporter.set_stage("📥 下载中")
-        await _update(task, status=STATUS_DOWNLOADING)
+        await _update(task, status=STATUS_DOWNLOADING, progress=0)
         written, sha1 = await download(
             state.download_client(),
             task.message,
             tmp,
             size=task.size,
             workers=cfg.upload.workers,
-            on_progress=reporter.on_progress,
+            on_progress=make_db_progress(task, reporter.on_progress),
             cancel_event=task.cancel_event,
         )
         log.info("下载完成 %s: %d bytes sha1=%s", task.filename, written, sha1)
 
         await reporter.set_stage("⬆️ 上传到 115")
-        await _update(task, status=STATUS_UPLOADING)
+        await _update(task, status=STATUS_UPLOADING, progress=0)
         cloud = await state.accounts.get()
         acct_name_used = getattr(cloud, "account", None)
         acct_name_used = getattr(acct_name_used, "name", None)
@@ -126,7 +149,7 @@ async def run_task(task: Task) -> None:
                 task.target_dir,
                 task.filename,
                 oss_concurrency=cfg.upload.oss_concurrency,
-                on_progress=reporter.on_progress,
+                on_progress=make_db_progress(task, reporter.on_progress),
                 cancel_event=task.cancel_event,
             )
         except Exception as up_err:  # noqa: BLE001 -- 上传失败：反馈账号并重抛
@@ -136,7 +159,7 @@ async def run_task(task: Task) -> None:
         if acct_name_used and state.accounts is not None:
             state.accounts.report_success(acct_name_used)
 
-        await _update(task, status=STATUS_DONE, method=result.method)
+        await _update(task, status=STATUS_DONE, method=result.method, progress=100)
         succeeded = True
         await reporter.final_text(
             f"✅ 完成\n📄 {task.filename}\n📦 {human_bytes(written)}\n"

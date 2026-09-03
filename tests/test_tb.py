@@ -200,6 +200,37 @@ def test_token_reload_if_disk_newer():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+def test_make_db_progress_throttle():
+    """进度落库节流：≥refresh 秒或到终点才写；base_cb 每次都透传。"""
+    import asyncio
+    from core.pipeline import make_db_progress
+
+    ticks = [1000.0]                       # 仿真实 monotonic（首调立即落库）
+    base_calls, writes = [], []
+
+    async def base(cur, total):
+        base_calls.append((cur, total))
+
+    async def update(task, **kw):
+        writes.append(kw.get("progress"))
+
+    cb = make_db_progress(object(), base_cb=base, refresh=3.0,
+                          clock=lambda: ticks[0], update=update)
+
+    async def go():
+        await cb(10, 100)     # 首调 → 落库 10
+        await cb(20, 100)     # 同刻 → 节流跳过
+        ticks[0] = 1002.9
+        await cb(50, 100)     # <3s → 跳过
+        ticks[0] = 1003.1
+        await cb(80, 100)     # ≥3s → 落库 80
+        await cb(100, 100)    # 终点 → 立即落库 100
+        await cb(30, 0)       # total=0（未知）→ 不落库
+    asyncio.run(go())
+    assert writes == [10, 80, 100], writes
+    assert len(base_calls) == 6
+
+
 def test_config_edit_helpers():
     """validate/write/set_config_key：双重校验、备份、失败不落盘。"""
     from tb import ops

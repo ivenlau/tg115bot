@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     target_dir  TEXT,
     status      TEXT,
     method      TEXT,
+    progress    INTEGER DEFAULT -1,
     error       TEXT,
     chat_id     INTEGER,
     message_id  INTEGER,
@@ -161,6 +162,12 @@ class Database:
         # 电影订阅功能已下线：清掉旧库残留表（新库无此表，DROP IF EXISTS 无副作用）
         await self._db.execute("DROP TABLE IF EXISTS movie_subs")
         await self._db.executescript(_SCHEMA)
+        # 旧库迁移：tasks 补 progress 列（2026-09：TUI 仪表盘实时百分比）
+        async with self._db.execute("PRAGMA table_info(tasks)") as cur:
+            cols = {r[1] for r in await cur.fetchall()}
+        if "progress" not in cols:
+            await self._db.execute("ALTER TABLE tasks ADD COLUMN progress INTEGER DEFAULT -1")
+            log.info("tasks 表已迁移：新增 progress 列")
         await self._db.commit()
         log.info("数据库就绪: %s", self.path)
 
@@ -180,16 +187,17 @@ class Database:
         now = time.time()
         await self.conn.execute(
             """INSERT INTO tasks(task_id,user_id,source,filename,size,target_dir,
-               status,method,error,chat_id,message_id,channel_id,created_at,updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               status,method,progress,error,chat_id,message_id,channel_id,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (t.task_id, t.user_id, t.source, t.filename, t.size, t.target_dir,
-             t.status or STATUS_QUEUED, t.method, t.error, t.chat_id, t.message_id,
-             t.channel_id, t.created_at or now, now),
+             t.status or STATUS_QUEUED, t.method, t.progress, t.error, t.chat_id,
+             t.message_id, t.channel_id, t.created_at or now, now),
         )
         await self.conn.commit()
 
     async def update_task(self, task_id: str, *, status: Optional[str] = None,
-                          method: Optional[str] = None, error: Optional[str] = None) -> None:
+                          method: Optional[str] = None, error: Optional[str] = None,
+                          progress: Optional[int] = None) -> None:
         sets, params = [], []
         if status is not None:
             sets.append("status=?"); params.append(status)
@@ -197,6 +205,8 @@ class Database:
             sets.append("method=?"); params.append(method)
         if error is not None:
             sets.append("error=?"); params.append(error)
+        if progress is not None:
+            sets.append("progress=?"); params.append(progress)
         if not sets:
             return
         sets.append("updated_at=?"); params.append(time.time())
@@ -520,6 +530,7 @@ def _task_row(r: aiosqlite.Row) -> TaskRow:
         task_id=r["task_id"], user_id=r["user_id"], source=r["source"],
         filename=r["filename"], size=r["size"], target_dir=r["target_dir"],
         status=r["status"], method=r["method"], error=r["error"],
+        progress=(r["progress"] if "progress" in r.keys() else -1),
         chat_id=r["chat_id"], message_id=r["message_id"], channel_id=r["channel_id"],
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
