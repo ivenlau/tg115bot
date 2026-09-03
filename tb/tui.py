@@ -600,7 +600,7 @@ class FilesPage(Page):
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
     def compose(self) -> ComposeResult:
-        yield Label("文件（115 网盘）", classes="page-title")
+        yield Label("📁 文件（115 网盘）", classes="page-title")
         yield Static(self.path, id="files-path")
         yield DataTable(id="files", cursor_type="row", zebra_stripes=True)
         yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
@@ -979,7 +979,7 @@ class FilesPage(Page):
 
 class OfflinePage(Page):
     def compose(self) -> ComposeResult:
-        yield Label("115 离线任务（30s 自动刷新）", classes="page-title")
+        yield Label("⏬ 115 离线任务（30s 自动刷新）", classes="page-title")
         yield DataTable(id="off-t", cursor_type="row", zebra_stripes=True)
         yield Input(placeholder="添加：粘贴 magnet/ed2k/直链 后回车（保存到 upload.target_dir）",
                     id="off-add")
@@ -1089,7 +1089,7 @@ class LogPage(Page):
         self._offset = 0
 
     def compose(self) -> ComposeResult:
-        yield Label(f"日志（{service.STDOUT_LOG}）", classes="page-title")
+        yield Label(f"📜 日志（{service.STDOUT_LOG}）", classes="page-title")
         yield RichLog(id="log", highlight=False, markup=False, wrap=False)
 
     def on_mount(self) -> None:
@@ -1129,7 +1129,7 @@ class ConfigPage(Page):
         self.cfg_path = ops.CONFIG_FILE     # 测试可重定向到临时文件
 
     def compose(self) -> ComposeResult:
-        yield Label("配置", classes="page-title")
+        yield Label("🔧 配置", classes="page-title")
         with TabbedContent():
             with TabPane("参数"):
                 with Horizontal(id="cfg-switches"):
@@ -1231,7 +1231,7 @@ class AuthSection(Vertical):
     """115 扫码授权（原独立授权页，现为配置页的子 Tab）。"""
 
     def compose(self) -> ComposeResult:
-        yield Label("115 扫码授权", classes="page-title")
+        yield Label("🔑 115 扫码授权", classes="page-title")
         yield Static("", id="auth-state")
         yield Button("生成二维码（强刷 token）", id="auth-btn", variant="primary")
         yield Static("点击按钮开始。用 115 APP 扫码；深色背景扫不动时 QR_INVERT=0 重进。",
