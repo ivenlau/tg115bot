@@ -23,6 +23,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
                              ListView, ListItem, RichLog, Static, Switch,
                              TabbedContent, TabPane, TextArea)
@@ -144,7 +145,6 @@ class TBApp(App):
     #card-api { border: round magenta; }
     #svc-btns { height: auto; margin: 1 0; }
     #svc-btns Button { margin-right: 1; }
-    #doctor-out { padding-top: 1; margin-bottom: 1; }
     #cfg-switches { height: auto; margin: 0 0 1 0; }
     #cfg-switches Switch { margin: 0 1 0 0; }
     #cfg-switches Label { margin: 0 2 0 0; }
@@ -311,6 +311,65 @@ def _plain(s) -> str:
     return str(s).replace("[", "(").replace("]", ")")
 
 
+# ── 模态弹窗（危险操作确认 / 信息展示） ────────────────────────────────
+
+class _DialogScreen(ModalScreen):
+    """居中弹窗骨架：底屏自动压暗，Esc 关闭。"""
+
+    BINDINGS = [("escape", "dismiss_screen", "关闭")]
+
+    DEFAULT_CSS = """
+    _DialogScreen { align: center middle; }
+    #dlg { width: auto; max-width: 76; height: auto; background: $surface;
+           border: round $accent; padding: 1 2; }
+    .dlg-title { text-style: bold; color: $text; margin-bottom: 1; }
+    .dlg-msg { margin-bottom: 1; }
+    .dlg-btns { height: auto; align-horizontal: right; }
+    .dlg-btns Button { margin-left: 1; }
+    """
+
+    def action_dismiss_screen(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmModal(_DialogScreen):
+    """危险操作确认：dismiss(True)=确认 / dismiss(False)=取消（Esc=取消）。"""
+
+    def __init__(self, title: str, message: str, danger: bool = True) -> None:
+        super().__init__()
+        self.dlg_title, self.message, self.danger = title, message, danger
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dlg"):
+            yield Label(self.dlg_title, classes="dlg-title")
+            yield Static(self.message, classes="dlg-msg")
+            with Horizontal(classes="dlg-btns"):
+                yield Button("取消", id="dlg-cancel", variant="default")
+                yield Button("确认", id="dlg-ok",
+                             variant="error" if self.danger else "primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "dlg-ok")
+
+
+class InfoModal(_DialogScreen):
+    """信息展示弹窗（诊断结果等）。"""
+
+    def __init__(self, title: str, body: str) -> None:
+        super().__init__()
+        self.dlg_title, self.body = title, body
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dlg"):
+            yield Label(self.dlg_title, classes="dlg-title")
+            yield Static(self.body, classes="dlg-msg")
+            with Horizontal(classes="dlg-btns"):
+                yield Button("关闭", id="dlg-close", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+
 class DashboardPage(Page):
     def compose(self) -> ComposeResult:
         yield Label("📊 仪表盘", classes="page-title")
@@ -324,7 +383,6 @@ class DashboardPage(Page):
             yield Button("停止", id="btn-stop", variant="error")
             yield Button("重启", id="btn-restart", variant="warning")
             yield Button("诊断", id="btn-doctor")
-        yield Static("", id="doctor-out", classes="hidden")
         yield Label("最近任务（bot 侧：TG 上传/频道监控/备份/直链；5s 刷新）",
                     classes="hint")
         yield DataTable(id="tasks", zebra_stripes=True)
@@ -485,12 +543,21 @@ class DashboardPage(Page):
         if bid == "btn-doctor":
             self._run_doctor()
             return
-        actions = {"btn-start": ("启动", service.do_start),
-                   "btn-stop": ("停止", service.do_stop),
-                   "btn-restart": ("重启", service.do_restart)}
-        if bid in actions:
-            label, fn = actions[bid]
+        # 第三元组 = 确认弹窗文案；None 直接执行（启动无破坏性）
+        actions = {"btn-start": ("启动", service.do_start, None),
+                   "btn-stop": ("停止", service.do_stop, "服务将停止，bot 不再收发消息。"),
+                   "btn-restart": ("重启", service.do_restart, "服务将重启，期间短暂不可用。")}
+        if bid not in actions:
+            return
+        label, fn, confirm = actions[bid]
+        if confirm is None:
             self._svc_action(label, fn)
+            return
+
+        def cb(ok: bool) -> None:
+            if ok:
+                self._svc_action(label, fn)
+        self.app.push_screen(ConfirmModal(f"{label}服务", confirm, danger=True), cb)
 
     def _svc_action(self, label: str, fn) -> None:
         def run() -> None:
@@ -513,16 +580,13 @@ class DashboardPage(Page):
 
         def run() -> None:
             checks = ops.doctor_checks()
-            lines = [f"  {'✅' if fine else '❌'} {name}: {detail}"
+            lines = [f"  {'✅' if fine else '❌'} {name}: {_plain(detail)}"
                      for name, fine, detail in checks]
             ok = all(c[1] for c in checks)
             lines.append("  结论: " + ("一切正常 ✅" if ok else "存在需要处理的项目 ❌"))
-
-            def apply() -> None:
-                out = self.query_one("#doctor-out", Static)
-                out.remove_class("hidden")
-                out.update("\n".join(lines))
-            _post(self.app, apply)
+            # 结果走模态弹窗；_plain 防 detail 里的方括号破坏 markup
+            _post(self.app, self.app.push_screen,
+                  InfoModal("服务诊断", "\n".join(lines)))
         self.run_worker(run, thread=True, group="doctor", exclusive=True)
 
 
@@ -532,7 +596,6 @@ class FilesPage(Page):
     def __init__(self) -> None:
         super().__init__()
         self.path = "/tg115bot"
-        self._confirm_key: str | None = None
         self._pending: tuple[str, str] | None = None   # (动作, 目标名)：download/rename/move/mkdir
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
@@ -544,7 +607,7 @@ class FilesPage(Page):
                     id="upload-input")
         yield Input(placeholder="动作输入框", id="action-input", classes="hidden")
         yield Static("", id="dl-status", classes="hidden")
-        yield Label("回车=进入 · d=删除(两次) · s=下载 · n=重命名 · m=移动 · +=新建 · r=刷新 · 输入框=上传",
+        yield Label("回车=进入 · d=删除(弹窗确认) · s=下载 · n=重命名 · m=移动 · +=新建 · r=刷新 · 输入框=上传",
                     classes="hint")
 
     def on_mount(self) -> None:
@@ -835,24 +898,29 @@ class FilesPage(Page):
         name = str(row[1])
         if name == "..":
             return
-        if self._confirm_key == name:
-            self._confirm_key = None
+        self.app.push_screen(
+            ConfirmModal("删除文件",
+                         f"删除 [bold]{_plain(name)}[/bold]？\n移入 115 回收站，可在网盘恢复。",
+                         danger=True),
+            lambda ok: ok and self._do_delete(name))
 
-            def fill() -> None:
-                from cloud115.filesystem import find_entry
-                from scripts.manual import entry_fid
+    def _do_delete(self, name: str) -> None:
+        ctx = self.app_ctx
+        if ctx is None:
+            return
 
-                async def go():
-                    entry = await find_entry(ctx.cloud, self.path.rstrip("/") + "/" + name)
-                    await ctx.cloud.raw.delete_files([entry_fid(entry)])
-                    ctx.cloud.raw.invalidate_path_cache()
-                self.app._cloud.submit(go()).result(60)
-                _post(self.app, self.load_dir)
-            self.run_worker(fill, thread=True)
-            self.app.notify_user(f"🧹 已删除 {name}（回收站可恢复）")
-        else:
-            self._confirm_key = name
-            self.app.notify_user(f"再按一次 d 确认删除: {name}")
+        def fill() -> None:
+            from cloud115.filesystem import find_entry
+            from scripts.manual import entry_fid
+
+            async def go():
+                entry = await find_entry(ctx.cloud, self.path.rstrip("/") + "/" + name)
+                await ctx.cloud.raw.delete_files([entry_fid(entry)])
+                ctx.cloud.raw.invalidate_path_cache()
+            self.app._cloud.submit(go()).result(60)
+            _post(self.app, self.load_dir)
+        self.run_worker(fill, thread=True)
+        self.app.notify_user(f"🧹 已删除 {name}（回收站可恢复）")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "action-input":
@@ -970,6 +1038,17 @@ class OfflinePage(Page):
             return
         ih = str(row[3])
         if not ih:
+            return
+        name = str(row[1])
+        self.app.push_screen(
+            ConfirmModal("删除离线任务",
+                         f"删除 [bold]{_plain(name)}[/bold]？\n将连同已下载的源文件一起删除。",
+                         danger=True),
+            lambda ok: ok and self._do_delete(ih))
+
+    def _do_delete(self, ih: str) -> None:
+        ctx = self.app_ctx
+        if ctx is None:
             return
 
         def fill() -> None:
@@ -1129,17 +1208,23 @@ class ConfigPage(Page):
         elif bid == "cfg-restart":
             btn = event.button
 
-            def run() -> None:
-                rc = service.do_restart()
-                _post(self.app, 
-                    self.app.notify_user,
-                    "重启完成" if rc == 0 else f"重启失败（exit {rc}）", error=bool(rc))
+            def cb(ok: bool) -> None:
+                if not ok:
+                    return
 
-                def enable() -> None:
-                    btn.disabled = False
-                _post(self.app, enable)
-            btn.disabled = True
-            self.run_worker(run, thread=True, group="svc", exclusive=True)
+                def run() -> None:
+                    rc = service.do_restart()
+                    _post(self.app,
+                        self.app.notify_user,
+                        "重启完成" if rc == 0 else f"重启失败（exit {rc}）", error=bool(rc))
+
+                    def enable() -> None:
+                        btn.disabled = False
+                    _post(self.app, enable)
+                btn.disabled = True
+                self.run_worker(run, thread=True, group="svc", exclusive=True)
+            self.app.push_screen(
+                ConfirmModal("重启服务", "确认重启服务？期间短暂不可用。", danger=True), cb)
 
 
 class AuthSection(Vertical):

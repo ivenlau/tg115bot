@@ -124,10 +124,10 @@ def _case_files_page_action_inputs() -> None:
 
 
 def _case_dashboard_service_buttons_stub() -> None:
-    """仪表盘服务按钮：打桩 do_start/do_stop，按钮触发即调用（不真启停）。"""
+    """仪表盘服务按钮：启动直通；停止/重启走弹窗确认（不真启停）。"""
     import asyncio
     from tb import service as tb_service
-    from tb.tui import TBApp
+    from tb.tui import TBApp, ConfirmModal
 
     calls = []
     orig = {n: getattr(tb_service, n) for n in ("do_start", "do_stop", "do_restart")}
@@ -141,11 +141,20 @@ def _case_dashboard_service_buttons_stub() -> None:
                 await pilot.pause(0.4)
                 page = app.query_one("#content DashboardPage")
                 assert app.query("#content #tasks")
-                page.query_one("#btn-start", Button).press()
+                page.query_one("#btn-start", Button).press()   # 启动无破坏性：直通
                 await pilot.pause(0.5)
-                page.query_one("#btn-stop", Button).press()
+                assert calls == ["start"], calls
+                page.query_one("#btn-stop", Button).press()    # 停止：弹确认
+                await pilot.pause(0.3)
+                assert isinstance(app.screen, ConfirmModal), "停止应弹确认框"
+                app.screen.query_one("#dlg-ok", Button).press()
                 await pilot.pause(0.5)
                 assert calls == ["start", "stop"], calls
+                page.query_one("#btn-restart", Button).press()  # 重启：弹确认后取消
+                await pilot.pause(0.3)
+                app.screen.query_one("#dlg-cancel", Button).press()
+                await pilot.pause(0.3)
+                assert calls == ["start", "stop"], "取消不应触发重启"
         asyncio.run(go())
     finally:
         for n, f in orig.items():
@@ -153,26 +162,28 @@ def _case_dashboard_service_buttons_stub() -> None:
 
 
 def _case_dashboard_doctor_stub() -> None:
-    """诊断按钮：doctor_checks 打桩后渲染到 #doctor-out。"""
+    """诊断按钮：doctor_checks 打桩后结果进模态弹窗，Esc 关闭。"""
     import asyncio
     from tb import ops as tb_ops
-    from tb.tui import TBApp
+    from tb.tui import InfoModal, TBApp
 
     orig = tb_ops.doctor_checks
     tb_ops.doctor_checks = lambda: [("假项", True, "ok"), ("坏项", False, "boom")]
     try:
         async def go():
+            from textual.widgets import Static
             app = TBApp()
             async with app.run_test(size=(110, 34)) as pilot:
                 await pilot.pause(0.4)
                 page = app.query_one("#content DashboardPage")
-                out = page.query_one("#doctor-out")
-                assert out.has_class("hidden")
                 page.query_one("#btn-doctor").press()
                 await pilot.pause(0.5)
-                assert not out.has_class("hidden")
-                text = str(out.render())
+                assert isinstance(app.screen, InfoModal), "诊断结果应在弹窗中"
+                text = str(app.screen.query_one(".dlg-msg", Static).render())
                 assert "假项" in text and "坏项" in text and "❌" in text
+                await pilot.press("escape")
+                await pilot.pause(0.3)
+                assert not isinstance(app.screen, InfoModal), "Esc 应关闭弹窗"
         asyncio.run(go())
     finally:
         tb_ops.doctor_checks = orig
