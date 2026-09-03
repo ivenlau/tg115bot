@@ -25,10 +25,13 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
                              ListView, ListItem, RichLog, Static, Switch,
                              TabbedContent, TabPane, TextArea)
+from rich.text import Text
 
 from tb import service
 
-PAGES = ["仪表盘", "文件", "离线任务", "配置", "日志"]
+NAV_ITEMS = [("📊", "仪表盘"), ("📁", "文件"), ("⏬", "离线任务"),
+             ("⚙️", "配置"), ("📜", "日志")]
+PAGES = [name for _, name in NAV_ITEMS]
 
 
 def _post(app, fn, *args, **kwargs):
@@ -120,13 +123,20 @@ class TBApp(App):
     TITLE = "tg115bot"
     CSS = """
     Screen { layout: horizontal; }
-    #sidebar { width: 26; border-right: solid $primary; background: $surface; padding: 1; height: 1fr; }
+    #sidebar { width: 26; border-right: solid $primary-darken-1; background: $surface; padding: 1; height: 1fr; }
     #sidebar ListView { height: auto; }
-    #side-status { dock: bottom; color: $text-muted; padding: 1 1 0 1; }
+    #nav > ListItem { color: $text-muted; padding: 0 1; margin-bottom: 1; background: transparent; border-left: tall transparent; }
+    #nav > ListItem.-highlight { color: $text; text-style: bold; background: $panel; border-left: tall $accent; }
+    #side-status { dock: bottom; color: $text-muted; padding: 0 1; background: $panel; border: round $primary-darken-1; }
     #content { padding: 1 2; height: 1fr; }
     .page-title { text-style: bold; color: $text; margin-bottom: 1; }
     .hint { color: $text-muted; margin-top: 1; }
     .hidden { display: none; }
+    #dash-cards { height: auto; margin-bottom: 1; }
+    .dash-card { width: 1fr; height: auto; min-height: 5; padding: 0 1; margin-right: 1; background: $panel; border: round $primary-darken-1; }
+    .dash-card:last-child { margin-right: 0; }
+    .dash-card.ok { border: round $success; }
+    .dash-card.down { border: round $error; }
     #svc-btns { height: auto; margin: 1 0; }
     #svc-btns Button { margin-right: 1; }
     #doctor-out { padding-top: 1; margin-bottom: 1; }
@@ -155,7 +165,8 @@ class TBApp(App):
         yield Header(show_clock=True)
         with Horizontal():
             with Vertical(id="sidebar"):
-                yield ListView(*[ListItem(Label(p)) for p in PAGES], id="nav")
+                yield ListView(*[ListItem(Label(f"{icon} {name}"))
+                                 for icon, name in NAV_ITEMS], id="nav")
                 yield Static("初始化中…", id="side-status")
             yield Container(id="content")
         yield Footer()
@@ -165,6 +176,8 @@ class TBApp(App):
         # worker——消除「退出时 worker 卡 .result 拖死进程」的一整类问题
         self._cloud.submit(self._init_all())
         self.query_one("#nav", ListView).index = 0   # 触发 Highlighted -> 挂载首页
+        self.set_interval(5, self._refresh_side)     # 侧栏底部小卡（账号/服务点）
+        self._refresh_side()
 
     async def _init_all(self) -> None:
         """建 115 上下文 + DB 句柄（need_login=False，未授权可去配置页扫码）。"""
@@ -174,14 +187,14 @@ class TBApp(App):
             cfg = manual.load_config()
         except Exception as e:  # noqa: BLE001
             self.ctx_error = f"配置加载失败: {e}（tb init）"
-            _post(self, self._side_status, self.ctx_error)
+            _post(self, self._refresh_side)
             return
 
         try:
             ctx = await manual.build_ctx(cfg, self.account, need_login=False)
         except Exception as e:  # noqa: BLE001
             self.ctx_error = str(e)
-            _post(self, self._side_status, self.ctx_error)
+            _post(self, self._refresh_side)
             return
         # 任务列表数据源（WAL 并发读安全；失败则仪表盘任务区静默降级）
         db = None
@@ -197,13 +210,24 @@ class TBApp(App):
                     pass
             db = None
         self.ctx, self.db = ctx, db
-        _post(self, self._side_status, f"账号 {ctx.account.name}")
+        _post(self, self._refresh_side)
 
     def _side_status(self, text: str) -> None:
         try:
             self.query_one("#side-status", Static).update(text)
         except Exception:  # noqa: BLE001 -- 页面未挂载时忽略
             pass
+
+    def _refresh_side(self) -> None:
+        """侧栏底部小卡：账号 + 服务状态圆点（5s 刷新，与仪表盘同节奏）。"""
+        if self.ctx is not None:
+            acct = f"👤 {self.ctx.account.name}"
+        elif self.ctx_error:
+            acct = f"⚠️ {_plain(self.ctx_error)[:36]}"
+        else:
+            acct = "⏳ 初始化中…"
+        running = service.live_pid() is not None
+        self._side_status(f"{acct}\n{'🟢 服务运行中' if running else '🔴 服务未运行'}")
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         # 用 Highlighted 而非 Selected：键盘/鼠标与程序化改 index 都会触发
@@ -264,12 +288,32 @@ class Page(Vertical):
 
 TASK_ICON = {"queued": "⏳", "downloading": "⬇️", "uploading": "⬆️",
              "done": "✅", "failed": "❌", "cancelled": "🚫"}
+TASK_LABEL = {"queued": "排队中", "downloading": "下载中", "uploading": "上传中",
+              "done": "完成", "failed": "失败", "cancelled": "已取消"}
+TASK_STYLE = {"queued": "yellow", "downloading": "cyan", "uploading": "magenta",
+              "done": "green", "failed": "red", "cancelled": "dim"}
+
+
+def _pct_bar(pct: float, width: int = 10) -> str:
+    """文本进度条（DataTable 单元格用；着色交给 Text style）。"""
+    filled = max(0, min(width, round(pct / 100 * width)))
+    return "▓" * filled + "░" * (width - filled)
+
+
+def _plain(s) -> str:
+    """异常文本进 markup 卡片前去方括号：Textual 对未知标签按字面渲染，
+    未闭合的 `[x` 会吞掉后续真实的样式闭合标签（escape 只覆盖 [a-z 前缀）。"""
+    return str(s).replace("[", "(").replace("]", ")")
 
 
 class DashboardPage(Page):
     def compose(self) -> ComposeResult:
-        yield Label("仪表盘", classes="page-title")
-        yield Static("加载中…", id="dash")
+        yield Label("📊 仪表盘", classes="page-title")
+        with Horizontal(id="dash-cards"):
+            yield Static("", id="card-svc", classes="dash-card")
+            yield Static("", id="card-disk", classes="dash-card")
+            yield Static("", id="card-cloud", classes="dash-card")
+            yield Static("", id="card-api", classes="dash-card")
         with Horizontal(id="svc-btns"):
             yield Button("启动", id="btn-start", variant="success")
             yield Button("停止", id="btn-stop", variant="error")
@@ -282,61 +326,103 @@ class DashboardPage(Page):
 
     def on_mount(self) -> None:
         t = self.query_one("#tasks", DataTable)
-        t.add_columns("时间", "文件名", "大小", "状态", "方式/来源")
+        t.add_columns("时间", "文件名", "大小", "状态", "进度", "方式")
         self.every(5, self.refresh_dash)
         self.refresh_dash()
 
     def refresh_dash(self) -> None:
-        lines: list[str] = []
-        # 服务
+        self._card_service()
+        self._card_disk()
+        self._card_cloud()
+        self._refresh_tasks()
+
+    # ── 指标卡（标题行 dim，主值 bold，细节行 dim） ──────────────────────
+
+    def _card_service(self) -> None:
+        card = self.query_one("#card-svc", Static)
         pid = service.live_pid()
-        if pid:
-            try:
-                import psutil
-                p = psutil.Process(pid)
-                mb = p.memory_info().rss / 1048576
-                up = time.time() - p.create_time()
-                d, rem = divmod(int(up), 86400)
-                up_s = f"{d}d {rem // 3600:02d}:{rem % 3600 // 60:02d}:{rem % 60:02d}"
-                lines.append(f"🟢 服务运行中   PID {pid}   内存 {mb:.0f}MB   已运行 {up_s}")
-            except Exception:  # noqa: BLE001
-                lines.append(f"🟢 服务运行中   PID {pid}")
-        else:
-            lines.append("🔴 服务未运行（点下方「启动」）")
-        # 磁盘
+        if not pid:
+            card.remove_class("ok").add_class("down")
+            card.update("[dim]服务[/dim]\n🔴 [bold red]未运行[/bold red]"
+                        "\n[dim]点下方「启动」[/dim]")
+            return
+        detail = f"PID {pid}"
         try:
-            free = shutil.disk_usage(str(service.INSTALL_DIR)).free / 1024 ** 3
-            lines.append(f"💾 磁盘剩余     {free:.1f}GB")
-        except OSError:
+            import psutil
+            p = psutil.Process(pid)
+            mb = p.memory_info().rss / 1048576
+            up = time.time() - p.create_time()
+            d, rem = divmod(int(up), 86400)
+            up_s = f"{d}d {rem // 3600:02d}:{rem % 3600 // 60:02d}:{rem % 60:02d}"
+            detail += f" · 内存 {mb:.0f}MB · 已运行 {up_s}"
+        except Exception:  # noqa: BLE001 -- 进程刚退出等瞬时态：只显示 PID
             pass
-        lines.append("")
-        # 115（需授权）
+        card.remove_class("down").add_class("ok")
+        card.update(f"[dim]服务[/dim]\n🟢 [bold green]运行中[/bold green]"
+                    f"\n[dim]{detail}[/dim]")
+
+    def _card_disk(self) -> None:
+        card = self.query_one("#card-disk", Static)
+        try:
+            du = shutil.disk_usage(str(service.INSTALL_DIR))
+        except OSError as e:
+            card.update(f"[dim]磁盘[/dim]\n⚠️ [yellow]不可用[/yellow]"
+                        f"\n[dim]{_plain(str(e))}[/dim]")
+            return
+        free_gb, total_gb = du.free / 1024 ** 3, du.total / 1024 ** 3
+        used_pct = du.used * 100 / du.total if du.total else 0.0
+        warn = " [red]（快满了）[/red]" if used_pct >= 90 else ""
+        card.update("[dim]磁盘[/dim]"
+                    f"\n💾 [bold]{free_gb:.1f}GB[/bold] 可用"
+                    f"\n[dim]共 {total_gb:.0f}GB · 已用 {used_pct:.0f}%{warn}[/dim]")
+
+    def _card_cloud(self) -> None:
+        cloud_card = self.query_one("#card-cloud", Static)
+        api_card = self.query_one("#card-api", Static)
         ctx = self.app_ctx
         if ctx is None:
-            lines.append(f"☁️ 115          {self.app.ctx_error or '初始化中…'}")
-        else:
-            def fill() -> None:
-                async def go():
-                    try:
-                        sp = await ctx.cloud.raw.user_space()
-                        if sp.get("total"):
-                            from core.progress import human_bytes
-                            pct = sp["used"] * 100 / sp["total"]
-                            lines.append(
-                                f"☁️ 115 空间     {human_bytes(sp['used'])} / "
-                                f"{human_bytes(sp['total'])}（{pct:.1f}%）")
-                        q = await ctx.cloud.raw.offline_quota()
-                        if q:
-                            lines.append(f"⬇️ 离线配额     已用 {q.get('used', '?')} / {q.get('count', '?')}")
-                        lines.append(f"🛡 API 余量     今日已用 {ctx.cloud.raw.request_count}"
-                                     f"（阈值 {ctx.cloud.raw.daily_limit}）")
-                    except Exception as e:  # noqa: BLE001
-                        lines.append(f"☁️ 115          未授权或不可达（{e}）→ 去「配置」页扫码")
-                self.app._cloud.submit(go()).result(60)
-                _post(self.app, 
-                    self.query_one("#dash", Static).update, "\n".join(lines))
-            self.run_worker(fill, thread=True)
-        self._refresh_tasks()
+            cloud_card.update("[dim]115 空间[/dim]\n☁️ [yellow]未就绪[/yellow]"
+                              f"\n[dim]{_plain(self.app.ctx_error or '初始化中…')}[/dim]")
+            api_card.update("[dim]API 余量[/dim]\n[dim]—[/dim]")
+            return
+
+        def fill() -> None:
+            async def go():
+                sp = await ctx.cloud.raw.user_space()
+                q = await ctx.cloud.raw.offline_quota()
+                return sp, q
+            try:
+                sp, q = self.app._cloud.submit(go()).result(60)
+            except Exception as e:  # noqa: BLE001
+                text = str(e).strip()
+                msg = text.splitlines()[0][:60] if text else repr(e)[:60]
+                _post(self.app, cloud_card.update,
+                      f"[dim]115 空间[/dim]\n☁️ [red]不可达[/red]"
+                      f"\n[dim]{_plain(msg)} → 配置页扫码[/dim]")
+                _post(self.app, api_card.update,
+                      "[dim]API 余量[/dim]\n[dim]—（115 不可达）[/dim]")
+                return
+
+            def apply() -> None:
+                from core.progress import human_bytes
+                used, total = sp.get("used", 0), sp.get("total", 0)
+                if total:
+                    pct = used * 100 / total
+                    cloud_card.update(
+                        "[dim]115 空间[/dim]"
+                        f"\n☁️ [bold]{human_bytes(used)}[/bold] / {human_bytes(total)}"
+                        f"\n[cyan]{_pct_bar(pct)}[/cyan] [dim]{pct:.1f}%[/dim]")
+                else:
+                    cloud_card.update("[dim]115 空间[/dim]\n☁️ 用量未知")
+                rc, dl = ctx.cloud.raw.request_count, ctx.cloud.raw.daily_limit
+                detail = "今日已用"
+                if q:
+                    detail += f" · 离线配额 {q.get('used', '?')}/{q.get('count', '?')}"
+                api_card.update("[dim]API 余量[/dim]"
+                                f"\n🛡 [bold]{rc}[/bold] / {dl}"
+                                f"\n[dim]{detail}[/dim]")
+            _post(self.app, apply)
+        self.run_worker(fill, thread=True)
 
     # ── 最近任务（tasks 表倒序；WAL 并发读安全） ─────────────────────────
 
@@ -358,17 +444,20 @@ class DashboardPage(Page):
                 t = self.query_one("#tasks", DataTable)
                 t.clear()
                 if not rows:
-                    t.add_row("", "暂无任务——向 bot 发送文件即可开始", "", "", "")
+                    t.add_row("", "暂无任务——向 bot 发送文件即可开始", "", "", "", "")
                     return
                 for r in rows:
                     tm = time.strftime("%m-%d %H:%M", time.localtime(r.created_at or 0))
-                    icon = TASK_ICON.get(r.status, r.status)
+                    style = TASK_STYLE.get(r.status, "")
+                    st = Text(f"{TASK_ICON.get(r.status, '')} {TASK_LABEL.get(r.status, r.status)}",
+                              style=style)
                     pct = getattr(r, "progress", -1)
-                    st = f"{icon} {r.status}" if r.status in ("downloading", "uploading", "queued") else icon
                     if r.status in ("downloading", "uploading") and 0 <= pct < 100:
-                        st += f" {pct}%"      # bot 侧节流落库的实时进度
+                        pg = Text(f"{_pct_bar(pct)} {pct:.0f}%", style=style or "cyan")
+                    else:
+                        pg = ""          # bot 侧节流落库的实时进度
                     via = (r.method or r.source or "").strip()
-                    t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, via)
+                    t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, pg, via)
             _post(self.app, apply)
         self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
 
