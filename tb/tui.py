@@ -28,7 +28,7 @@ from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
 
 from tb import service
 
-PAGES = ["仪表盘", "文件", "离线任务", "日志", "配置"]
+PAGES = ["仪表盘", "文件", "离线任务", "配置", "日志"]
 
 
 def _post(app, fn, *args, **kwargs):
@@ -213,7 +213,7 @@ class TBApp(App):
 
     def _show_page(self, idx: int) -> None:
         content = self.query_one("#content", Container)
-        page_cls = [DashboardPage, FilesPage, OfflinePage, LogPage, ConfigPage][idx]
+        page_cls = [DashboardPage, FilesPage, OfflinePage, ConfigPage, LogPage][idx]
 
         async def _swap() -> None:
             await content.remove_children()
@@ -298,11 +298,11 @@ class DashboardPage(Page):
                 up = time.time() - p.create_time()
                 d, rem = divmod(int(up), 86400)
                 up_s = f"{d}d {rem // 3600:02d}:{rem % 3600 // 60:02d}:{rem % 60:02d}"
-                lines.append(f"● 服务运行中   PID {pid}   内存 {mb:.0f}MB   已运行 {up_s}")
+                lines.append(f"🟢 服务运行中   PID {pid}   内存 {mb:.0f}MB   已运行 {up_s}")
             except Exception:  # noqa: BLE001
-                lines.append(f"● 服务运行中   PID {pid}")
+                lines.append(f"🟢 服务运行中   PID {pid}")
         else:
-            lines.append("○ 服务未运行（点下方「启动」）")
+            lines.append("🔴 服务未运行（点下方「启动」）")
         # 磁盘
         try:
             free = shutil.disk_usage(str(service.INSTALL_DIR)).free / 1024 ** 3
@@ -501,8 +501,13 @@ class FilesPage(Page):
         if not row or not str(row[0]).startswith("📂"):
             return
         name = str(row[1])     # 名字取行数据（未用 key，key 是自动生成的）
-        self.path = (self.path.rstrip("/") + "/" + name if name != ".."
-                     else str(Path(self.path).parent))
+        if name == "..":
+            # 纯字符串求父路径——不用 Path（Windows 上 Path('/tg115bot').parent
+            # 会把 / 换成 \，115 路径全是 /，直接报错）
+            cut = self.path.rstrip("/")
+            self.path = cut[: cut.rfind("/")] or "/"
+        else:
+            self.path = self.path.rstrip("/") + "/" + name
         self.load_dir()
 
     def on_key(self, event) -> None:  # noqa: BLE001

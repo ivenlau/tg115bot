@@ -60,7 +60,7 @@ def _case_tui_app_headless() -> None:
             await pilot.pause(0.3)
             assert app.query("#content DashboardPage")
             lv = app.query_one("#nav")
-            for idx, expect in ((3, "LogPage"), (4, "ConfigPage"), (1, "FilesPage")):
+            for idx, expect in ((3, "ConfigPage"), (4, "LogPage"), (1, "FilesPage")):
                 lv.index = idx
                 await pilot.pause(0.4)
                 assert app.query(f"#content {expect}"), expect
@@ -194,7 +194,7 @@ def _case_config_page_headless() -> None:
             app = TBApp()
             async with app.run_test(size=(110, 34)) as pilot:
                 await pilot.pause(0.3)
-                app.query_one("#nav").index = 4      # -> 配置页
+                app.query_one("#nav").index = 3      # -> 配置页
                 await pilot.pause(0.5)
                 page = app.query_one("#content ConfigPage")
                 assert len(page.query(TabPane)) == 2  # 参数 / 115 授权
