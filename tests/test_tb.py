@@ -215,6 +215,64 @@ def test_files_page_download_ui():
     asyncio.run(go())
 
 
+def test_dashboard_service_buttons_stub():
+    """仪表盘服务按钮：打桩 do_start/do_stop，按钮触发即调用（不真启停）。"""
+    import asyncio
+    from tb import service as tb_service
+    from tb.tui import TBApp
+
+    calls = []
+    _orig = {n: getattr(tb_service, n) for n in ("do_start", "do_stop", "do_restart")}
+    tb_service.do_start = lambda: (calls.append("start"), 0)[1]
+    tb_service.do_stop = lambda: (calls.append("stop"), 0)[1]
+    tb_service.do_restart = lambda: (calls.append("restart"), 0)[1]
+    try:
+        async def go():
+            from textual.widgets import Button
+            app = TBApp()
+            async with app.run_test(size=(110, 34)) as pilot:
+                await pilot.pause(0.4)
+                page = app.query_one("#content DashboardPage")
+                assert app.query("#content #tasks")          # 任务表存在
+                page.query_one("#btn-start", Button).press()
+                await pilot.pause(0.5)
+                page.query_one("#btn-stop", Button).press()
+                await pilot.pause(0.5)
+                assert calls == ["start", "stop"], calls
+        asyncio.run(go())
+    finally:
+        for n, f in _orig.items():               # 还原打桩的函数
+            setattr(tb_service, n, f)
+
+
+def test_dashboard_doctor_stub():
+    """诊断按钮：doctor_checks 打桩后渲染到 #doctor-out。"""
+    import asyncio
+    from tb import ops as tb_ops
+    from tb.tui import TBApp
+
+    orig = tb_ops.doctor_checks
+    tb_ops.doctor_checks = lambda: [("假项", True, "ok"), ("坏项", False, "boom")]
+    try:
+        async def go():
+            app = TBApp()
+            async with app.run_test(size=(110, 34)) as pilot:
+                await pilot.pause(0.4)
+                page = app.query_one("#content DashboardPage")
+                out = page.query_one("#doctor-out")
+                assert out.has_class("hidden")
+                page.query_one("#btn-doctor").press()
+                await pilot.pause(0.5)
+                assert not out.has_class("hidden")
+                region = out.render() if hasattr(out, "render") else None
+                # 拿渲染文本验证（Static.render 是富文本，取 str）
+                text = str(out.render())
+                assert "假项" in text and "坏项" in text and "❌" in text
+        asyncio.run(go())
+    finally:
+        tb_ops.doctor_checks = orig
+
+
 def test_tui_app_headless():
     """Textual 无头启动：组合/翻页不炸（数据层不可用时应优雅降级）。"""
     import asyncio

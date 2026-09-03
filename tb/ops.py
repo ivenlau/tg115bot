@@ -138,55 +138,54 @@ def _mihomo_warnings() -> list[str]:
     return warns
 
 
-def cmd_doctor() -> int:
-    """一键体检：环境 / 配置 / 115 探活 / 磁盘 / mihomo 安全。"""
-    ok = True
+def doctor_checks() -> list[tuple[str, bool, str]]:
+    """逐项体检：返回 [(名称, ok, 详情)]。CLI（cmd_doctor 打印）与 TUI 共用。
 
-    def item(name: str, fine: bool, detail: str) -> None:
-        nonlocal ok
-        ok = ok and fine
-        print(f"  {'✅' if fine else '❌'} {name}: {detail}")
+    阻塞数秒（含 check115 --probe 子进程与磁盘/网络探测），调用方放线程。
+    """
+    checks: list[tuple[str, bool, str]] = []
 
-    print(f"tb doctor (rev {_git_rev()})")
-    print("─" * 56)
+    checks.append(("Python", sys.version_info >= (3, 12), sys.version.split()[0]))
 
-    # 1. Python
-    item("Python", sys.version_info >= (3, 12), sys.version.split()[0])
-
-    # 2. 配置
     has_cfg = (INSTALL_DIR / "config.yaml").exists()
-    item("config.yaml", has_cfg, "存在" if has_cfg else "缺失（先跑 tb init）")
+    checks.append(("config.yaml", has_cfg, "存在" if has_cfg else "缺失（先跑 tb init）"))
 
-    # 3. 115 探活（委托 check115 --probe，轻量不产生上传）
+    # 115 探活（委托 check115 --probe，轻量不产生上传）
     if has_cfg:
         r = subprocess.run([sys.executable, str(SCRIPTS / "check115.py"), "--probe"],
                            capture_output=True, text=True)
         probe_out = (r.stdout or r.stderr).strip().splitlines()
         detail = probe_out[-1] if probe_out else f"exit {r.returncode}"
-        item("115 授权", r.returncode == 0, detail)
+        checks.append(("115 授权", r.returncode == 0, detail))
 
-    # 4. 磁盘水位
     try:
         free_gb = shutil.disk_usage(str(INSTALL_DIR)).free / 1024 ** 3
-        item("磁盘", free_gb >= 5, f"剩余 {free_gb:.1f}GB")
+        checks.append(("磁盘", free_gb >= 5, f"剩余 {free_gb:.1f}GB"))
     except OSError as e:
-        item("磁盘", False, str(e))
+        checks.append(("磁盘", False, str(e)))
 
-    # 5. mihomo 安全（仅 Linux）
     if os.name == "posix":
         warns = _mihomo_warnings()
         if warns:
-            for w in warns:
-                print(f"  ⚠️  {w}")
-            ok = False
+            checks.extend(("mihomo 安全", False, w) for w in warns)
         else:
-            print("  ✅ mihomo: 无暴露风险（未部署或已加固）")
+            checks.append(("mihomo 安全", True, "无暴露风险（未部署或已加固）"))
 
-    # 6. 服务
     from tb import service
     pid = service.live_pid()
-    item("服务", True, f"运行中 PID {pid}" if pid else "未运行（tb start 启动）")
+    checks.append(("服务", True, f"运行中 PID {pid}" if pid else "未运行（tb start 启动）"))
+    return checks
 
+
+def cmd_doctor() -> int:
+    """一键体检：环境 / 配置 / 115 探活 / 磁盘 / mihomo 安全 / 服务。"""
+    print(f"tb doctor (rev {_git_rev()})")
+    print("─" * 56)
+    checks = doctor_checks()
+    ok = True
+    for name, fine, detail in checks:
+        ok = ok and fine
+        print(f"  {'✅' if fine else '❌'} {name}: {detail}")
     print("─" * 56)
     print("结论: " + ("一切正常 ✅" if ok else "存在需要处理的项目 ❌（见上）"))
     return 0 if ok else 1

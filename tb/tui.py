@@ -87,6 +87,9 @@ class TBApp(App):
     .page-title { text-style: bold; color: $text; margin-bottom: 1; }
     .hint { color: $text-muted; margin-top: 1; }
     .hidden { display: none; }
+    #svc-btns { height: auto; margin: 1 0; }
+    #svc-btns Button { margin-right: 1; }
+    #doctor-out { padding-top: 1; margin-bottom: 1; }
     #dl-status { color: $text-muted; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; }
@@ -94,6 +97,7 @@ class TBApp(App):
 
     BINDINGS = [("q", "quit", "退出")]
     ctx = None            # manual.Ctx（后台就绪后填充）
+    db = None             # persistence.Database（后台就绪后填充；只读用途）
     ctx_error: str = ""   # 构建失败原因（未配置/未授权等）
 
     def __init__(self, account: str = "") -> None:
@@ -132,6 +136,14 @@ class TBApp(App):
             self.ctx_error = str(e)
             self._side_status(self.ctx_error)
             return
+        # 任务列表数据源（WAL 并发读安全；失败则仪表盘任务区静默降级）
+        try:
+            from persistence.db import Database
+            db = Database(cfg.db_path)
+            self._cloud.submit(db.init()).result(15)
+            self.db = db
+        except Exception:  # noqa: BLE001
+            pass
         self._side_status(f"账号 {self.ctx.account.name}")
 
     def _side_status(self, text: str) -> None:
@@ -159,8 +171,13 @@ class TBApp(App):
         self.notify(msg, severity="error" if error else "information")
 
     def on_unmount(self) -> None:
-        """退出：在常驻循环上关 115 会话，然后停循环。"""
-        ctx, self.ctx = self.ctx, None
+        """退出：在常驻循环上关 DB 与 115 会话，然后停循环。"""
+        ctx, db, self.ctx, self.db = self.ctx, self.db, None, None
+        try:
+            if db is not None:
+                self._cloud.submit(db.close()).result(5)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if ctx is not None:
                 self._cloud.submit(ctx.cloud.close()).result(10)
@@ -192,12 +209,27 @@ class Page(Vertical):
 
 # ── 仪表盘 ──────────────────────────────────────────────────────────────
 
+TASK_ICON = {"queued": "⏳", "downloading": "⬇️", "uploading": "⬆️",
+             "done": "✅", "failed": "❌", "cancelled": "🚫"}
+
+
 class DashboardPage(Page):
     def compose(self) -> ComposeResult:
         yield Label("仪表盘", classes="page-title")
         yield Static("加载中…", id="dash")
+        with Horizontal(id="svc-btns"):
+            yield Button("启动", id="btn-start", variant="success")
+            yield Button("停止", id="btn-stop", variant="error")
+            yield Button("重启", id="btn-restart", variant="warning")
+            yield Button("诊断", id="btn-doctor")
+        yield Static("", id="doctor-out", classes="hidden")
+        yield Label("最近任务（bot 侧：TG 上传/频道监控/备份/直链；5s 刷新）",
+                    classes="hint")
+        yield DataTable(id="tasks", zebra_stripes=True)
 
     def on_mount(self) -> None:
+        t = self.query_one("#tasks", DataTable)
+        t.add_columns("时间", "文件名", "大小", "状态", "方式/来源")
         self.every(5, self.refresh_dash)
         self.refresh_dash()
 
@@ -217,7 +249,7 @@ class DashboardPage(Page):
             except Exception:  # noqa: BLE001
                 lines.append(f"● 服务运行中   PID {pid}")
         else:
-            lines.append("○ 服务未运行（tb start 或侧栏外终端启动）")
+            lines.append("○ 服务未运行（点下方「启动」）")
         # 磁盘
         try:
             free = shutil.disk_usage(str(service.INSTALL_DIR)).free / 1024 ** 3
@@ -246,11 +278,90 @@ class DashboardPage(Page):
                         lines.append(f"🛡 API 余量     今日已用 {ctx.cloud.raw.request_count}"
                                      f"（阈值 {ctx.cloud.raw.daily_limit}）")
                     except Exception as e:  # noqa: BLE001
-                        lines.append(f"☁️ 115          未授权或不可达（{e}）→ 去「授权」页扫码")
+                        lines.append(f"☁️ 115          未授权或不可达（{e}）→ 去「配置」页扫码")
                 self.app._cloud.submit(go()).result(60)
                 self.app.call_from_thread(
                     self.query_one("#dash", Static).update, "\n".join(lines))
             self.run_worker(fill, thread=True)
+        self._refresh_tasks()
+
+    # ── 最近任务（tasks 表倒序；WAL 并发读安全） ─────────────────────────
+
+    def _refresh_tasks(self) -> None:
+        db = self.app.db
+        if db is None:
+            return
+
+        def fill() -> None:
+            async def go():
+                return await db.recent_tasks(15)
+            try:
+                rows = self.app._cloud.submit(go()).result(10)
+            except Exception:  # noqa: BLE001 -- 单轮查询失败静默跳过
+                return
+
+            def apply() -> None:
+                from core.progress import human_bytes
+                t = self.query_one("#tasks", DataTable)
+                t.clear()
+                if not rows:
+                    t.add_row("", "暂无任务——向 bot 发送文件即可开始", "", "", "")
+                    return
+                for r in rows:
+                    tm = time.strftime("%m-%d %H:%M", time.localtime(r.created_at or 0))
+                    icon = TASK_ICON.get(r.status, r.status)
+                    st = f"{icon} {r.status}" if r.status in ("downloading", "uploading", "queued") else icon
+                    via = (r.method or r.source or "").strip()
+                    t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, via)
+            self.app.call_from_thread(apply)
+        self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
+
+    # ── 服务控制（线程 worker；exclusive 防连点竞态） ─────────────────────
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "btn-doctor":
+            self._run_doctor()
+            return
+        actions = {"btn-start": ("启动", service.do_start),
+                   "btn-stop": ("停止", service.do_stop),
+                   "btn-restart": ("重启", service.do_restart)}
+        if bid in actions:
+            label, fn = actions[bid]
+            self._svc_action(label, fn)
+
+    def _svc_action(self, label: str, fn) -> None:
+        def run() -> None:
+            self.app.call_from_thread(self._set_buttons, False)
+            rc = fn()
+            self.app.call_from_thread(self._set_buttons, True)
+            self.app.call_from_thread(self.refresh_dash)
+            self.app.call_from_thread(
+                self.app.notify_user,
+                f"{label}完成" if rc == 0 else f"{label}失败（exit {rc}）",
+                error=bool(rc))
+        self.run_worker(run, thread=True, group="svc", exclusive=True)
+
+    def _set_buttons(self, enabled: bool) -> None:
+        for b in self.query(Button):
+            b.disabled = not enabled
+
+    def _run_doctor(self) -> None:
+        from tb import ops
+
+        def run() -> None:
+            checks = ops.doctor_checks()
+            lines = [f"  {'✅' if fine else '❌'} {name}: {detail}"
+                     for name, fine, detail in checks]
+            ok = all(c[1] for c in checks)
+            lines.append("  结论: " + ("一切正常 ✅" if ok else "存在需要处理的项目 ❌"))
+
+            def apply() -> None:
+                out = self.query_one("#doctor-out", Static)
+                out.remove_class("hidden")
+                out.update("\n".join(lines))
+            self.app.call_from_thread(apply)
+        self.run_worker(run, thread=True, group="doctor", exclusive=True)
 
 
 # ── 文件浏览 ────────────────────────────────────────────────────────────
