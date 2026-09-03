@@ -8,6 +8,7 @@ venv/
 
 # 配置与凭据（绝不入库）
 config.yaml
+config.yaml.bak.*
 config/*.session
 config/*.session-journal
 config/open_token.json
