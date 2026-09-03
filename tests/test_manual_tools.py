@@ -202,7 +202,7 @@ def test_fmt_ls_and_offline():
     assert manual.fmt_ls_line(items[1]) == "📂 adir/"
 
     t = {"name": "movie", "status": 1, "percentDone": 42, "info_hash": "abcdef1234"}
-    assert manual.fmt_offline_line(t) == "⬇️ movie 42%  [abcdef12]"
+    assert manual.fmt_offline_line(t) == "📥 movie 42%  [abcdef12]"
     assert manual.fmt_offline_line({"name": "x", "status": 2, "info_hash": "ih"}).startswith("✅")
     assert manual.fmt_offline_line({"name": "y", "status": -1, "info_hash": "ih"}).startswith("❌")
 
@@ -251,7 +251,7 @@ def test_build_argv_rules():
 
 def test_parser_account_positions():
     p = manual.build_parser()
-    # ⚠️ 子解析器 default=SUPPRESS：顶层值不被覆盖回空串
+    # ❗ 子解析器 default=SUPPRESS：顶层值不被覆盖回空串
     assert p.parse_args(["--account", "b", "ls", "/x"]).account == "b"
     assert p.parse_args(["ls", "/x", "--account", "b"]).account == "b"
     assert p.parse_args(["ls", "/x"]).account == ""

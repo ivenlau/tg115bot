@@ -29,8 +29,11 @@ from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
 
 from tb import service
 
+# 图标只用 East Asian Width=W 的单码位字符（rich 与终端一致按 2 格渲染）：
+# ⚙️/☁️/⬇️ 这类默认文本呈现的码位（EAW=N，靠 VS16 才成 emoji）在部分
+# 终端按 1 格渲染，菜单/表格列的文字会错位一格
 NAV_ITEMS = [("📊", "仪表盘"), ("📁", "文件"), ("⏬", "离线任务"),
-             ("⚙️", "配置"), ("📜", "日志")]
+             ("🔧", "配置"), ("📜", "日志")]
 
 
 def _post(app, fn, *args, **kwargs):
@@ -133,8 +136,12 @@ class TBApp(App):
     .hidden { display: none; }
     #dash-cards { layout: grid; grid-size: 2 2; grid-gutter: 0 1; height: auto; margin-bottom: 1; }
     .dash-card { width: 1fr; height: auto; min-height: 5; padding: 0 1; background: $panel; border: round $primary-darken-1; }
-    .dash-card.ok { border: round $success; }
-    .dash-card.down { border: round $error; }
+    #card-svc.ok { border: round $success; }
+    #card-svc.down { border: round $error; }
+    #card-disk { border: round yellow; }
+    #card-disk.full { border: round $error; }
+    #card-cloud { border: round cyan; }
+    #card-api { border: round magenta; }
     #svc-btns { height: auto; margin: 1 0; }
     #svc-btns Button { margin-right: 1; }
     #doctor-out { padding-top: 1; margin-bottom: 1; }
@@ -221,11 +228,11 @@ class TBApp(App):
         if self.ctx is not None:
             acct = f"👤 {_plain(self.ctx.account.name)}"
         elif self.ctx_error:
-            acct = f"⚠️ {_plain(self.ctx_error)[:36]}"
+            acct = f"❗ {_plain(self.ctx_error)[:36]}"
         else:
             acct = "⏳ 初始化中…"
         running = service.live_pid() is not None
-        self._side_status(f"{acct}\n{'🟢 服务运行中' if running else '🔴 服务未运行'}")
+        self._side_status(f"{acct}\n{'⏩ 服务运行中' if running else '🛑 服务未运行'}")
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         # 用 Highlighted 而非 Selected：键盘/鼠标与程序化改 index 都会触发
@@ -284,7 +291,7 @@ class Page(Vertical):
 
 # ── 仪表盘 ──────────────────────────────────────────────────────────────
 
-TASK_ICON = {"queued": "⏳", "downloading": "⬇️", "uploading": "⬆️",
+TASK_ICON = {"queued": "⏳", "downloading": "📥", "uploading": "📤",
              "done": "✅", "failed": "❌", "cancelled": "🚫"}
 TASK_LABEL = {"queued": "排队中", "downloading": "下载中", "uploading": "上传中",
               "done": "完成", "failed": "失败", "cancelled": "已取消"}
@@ -341,10 +348,10 @@ class DashboardPage(Page):
         pid = service.live_pid()
         if not pid:
             card.remove_class("ok").add_class("down")
-            card.update("[dim]服务[/dim]\n🔴 [bold red]未运行[/bold red]"
+            card.update("[dim]服务[/dim]\n🛑 [bold red]未运行[/bold red]"
                         "\n[dim]点下方「启动」[/dim]")
             return
-        value = f"🟢 [bold green]运行中[/bold green]  PID {pid}"
+        value = f"⏩ [bold green]运行中[/bold green]  PID {pid}"
         detail = ""
         try:
             import psutil
@@ -368,22 +375,26 @@ class DashboardPage(Page):
         try:
             du = shutil.disk_usage(str(service.INSTALL_DIR))
         except OSError as e:
-            card.update(f"[dim]磁盘[/dim]\n⚠️ [yellow]不可用[/yellow]"
+            card.set_class(False, "full")
+            card.update(f"[dim]磁盘[/dim]\n❗ [yellow]不可用[/yellow]"
                         f"\n[dim]{_plain(str(e))}[/dim]")
             return
-        free_gb, total_gb = du.free / 1024 ** 3, du.total / 1024 ** 3
-        used_pct = du.used * 100 / du.total if du.total else 0.0
-        warn = " [red]（快满了）[/red]" if used_pct >= 90 else ""
+        from core.progress import human_bytes
+        used, total = du.used, du.total
+        pct = used * 100 / total if total else 0.0
+        # 与 115 卡同构的用量条；80/90 阈值红黄绿，≥90 边框同步变红（.full）
+        color = "red" if pct >= 90 else "yellow" if pct >= 80 else "green"
+        card.set_class(pct >= 90, "full")
         card.update("[dim]磁盘[/dim]"
-                    f"\n💾 [bold]{free_gb:.1f}GB[/bold] 可用"
-                    f"\n[dim]共 {total_gb:.0f}GB · 已用 {used_pct:.0f}%{warn}[/dim]")
+                    f"\n💾 [bold]{human_bytes(used)}[/bold] / {human_bytes(total)}"
+                    f"\n[{color}]{_pct_bar(pct)}[/{color}] [dim]{pct:.0f}% 已用[/dim]")
 
     def _card_cloud(self) -> None:
         cloud_card = self.query_one("#card-cloud", Static)
         api_card = self.query_one("#card-api", Static)
         ctx = self.app_ctx
         if ctx is None:
-            cloud_card.update("[dim]115 空间[/dim]\n☁️ [yellow]未就绪[/yellow]"
+            cloud_card.update("[dim]115 空间[/dim]\n📦 [yellow]未就绪[/yellow]"
                               f"\n[dim]{_plain(self.app.ctx_error or '初始化中…')}[/dim]")
             api_card.update("[dim]API 余量[/dim]\n[dim]—[/dim]")
             return
@@ -399,7 +410,7 @@ class DashboardPage(Page):
                 text = str(e).strip()
                 msg = text.splitlines()[0][:60] if text else repr(e)[:60]
                 _post(self.app, cloud_card.update,
-                      f"[dim]115 空间[/dim]\n☁️ [red]不可达[/red]"
+                      f"[dim]115 空间[/dim]\n📦 [red]不可达[/red]"
                       f"\n[dim]{_plain(msg)} → 配置页扫码[/dim]")
                 _post(self.app, api_card.update,
                       "[dim]API 余量[/dim]\n[dim]—（115 不可达）[/dim]")
@@ -412,16 +423,16 @@ class DashboardPage(Page):
                     pct = used * 100 / total
                     cloud_card.update(
                         "[dim]115 空间[/dim]"
-                        f"\n☁️ [bold]{human_bytes(used)}[/bold] / {human_bytes(total)}"
+                        f"\n📦 [bold]{human_bytes(used)}[/bold] / {human_bytes(total)}"
                         f"\n[cyan]{_pct_bar(pct)}[/cyan] [dim]{pct:.1f}%[/dim]")
                 else:
-                    cloud_card.update("[dim]115 空间[/dim]\n☁️ 用量未知")
+                    cloud_card.update("[dim]115 空间[/dim]\n📦 用量未知")
                 rc, dl = ctx.cloud.raw.request_count, ctx.cloud.raw.daily_limit
                 detail = "今日已用"
                 if q:
                     detail += f" · 离线配额 {q.get('used', '?')}/{q.get('count', '?')}"
                 api_card.update("[dim]API 余量[/dim]"
-                                f"\n🛡 [bold]{rc}[/bold] / {dl}"
+                                f"\n🧮 [bold]{rc}[/bold] / {dl}"
                                 f"\n[dim]{detail}[/dim]")
             _post(self.app, apply)
         # exclusive：网络黑洞时旧 worker 未超时前不叠新 worker（与 dash-tasks 同策）
@@ -545,7 +556,7 @@ class FilesPage(Page):
     def load_dir(self) -> None:
         ctx = self.app_ctx
         if ctx is None:
-            self.query_one("#files", DataTable).add_row("⚠️", self.app.ctx_error or "初始化中…", "")
+            self.query_one("#files", DataTable).add_row("❓", self.app.ctx_error or "初始化中…", "")
             return
         self._load_gen += 1
         gen = self._load_gen
@@ -569,7 +580,7 @@ class FilesPage(Page):
                     return
                 t = self.query_one("#files", DataTable)
                 t.clear()
-                t.add_row("⚠️", msg, "")
+                t.add_row("❌", msg, "")
             try:
                 rows = self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001 -- 网络/授权问题不炸 worker
@@ -677,7 +688,7 @@ class FilesPage(Page):
         status = self.query_one("#dl-status", Static)
         status.remove_class("hidden")
         full = self.path.rstrip("/") + "/" + name
-        status.update(f"⬇️ {name}  准备中…")
+        status.update(f"📥 {name}  准备中…")
         last = [0.0]
 
         def on_progress(written: int, total: int) -> None:
@@ -688,7 +699,7 @@ class FilesPage(Page):
             from core.progress import human_bytes
             pct = f" {written * 100 // total}%" if total else ""
             _post(self.app, status.update,
-                                      f"⬇️ {name}  {human_bytes(written)}{pct}")
+                                      f"📥 {name}  {human_bytes(written)}{pct}")
 
         def dl() -> None:
             from cloud115.download import (download_file, parse_downurl,
@@ -838,7 +849,7 @@ class FilesPage(Page):
                 self.app._cloud.submit(go()).result(60)
                 _post(self.app, self.load_dir)
             self.run_worker(fill, thread=True)
-            self.app.notify_user(f"🗑 已删除 {name}（回收站可恢复）")
+            self.app.notify_user(f"🧹 已删除 {name}（回收站可恢复）")
         else:
             self._confirm_key = name
             self.app.notify_user(f"再按一次 d 确认删除: {name}")
@@ -967,7 +978,7 @@ class OfflinePage(Page):
             self.app._cloud.submit(go()).result(60)
             _post(self.app, self.refresh_list)
         self.run_worker(fill, thread=True)
-        self.app.notify_user(f"🗑 已删离线任务 {ih}…")
+        self.app.notify_user(f"🧹 已删离线任务 {ih}…")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "off-add":
@@ -1070,7 +1081,7 @@ class ConfigPage(Page):
             self.query_one("#sw-keep", Switch).value = bool(cfg.storage.keep_local)
             self.query_one("#sw-chan", Switch).value = bool(cfg.channel_monitor.enabled)
         except Exception as e:  # noqa: BLE001
-            self._status(f"⚠️ 配置读取失败: {e}")
+            self._status(f"❗ 配置读取失败: {e}")
 
     def _status(self, text: str, error: bool = False) -> None:
         s = self.query_one("#cfg-status", Static)
@@ -1148,7 +1159,7 @@ class AuthSection(Vertical):
             names = ", ".join(a.name for a in cfg.accounts) or "（config.accounts 为空）"
             self.query_one("#auth-state", Static).update(f"👤 账号: {names}")
         except Exception as e:  # noqa: BLE001
-            self.query_one("#auth-state", Static).update(f"⚠️ {e}")
+            self.query_one("#auth-state", Static).update(f"❗ {e}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "auth-btn":

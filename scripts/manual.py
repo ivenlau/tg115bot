@@ -185,7 +185,7 @@ def make_progress():
             return
         last = now
         pct = f" ({cur * 100 // total}%)" if total else ""
-        line = f"  ⬇️ {human_bytes(cur)}{pct}"
+        line = f"  📥 {human_bytes(cur)}{pct}"
         if tty:
             print("\r" + line.ljust(36), end="", flush=True)
         else:
@@ -228,7 +228,7 @@ def sort_entries(items: list) -> list:
     return sorted(items, key=lambda it: (not entry_is_dir(it), entry_name(it)))
 
 
-OFFLINE_ICON = {-1: "❌", 1: "⬇️", 2: "✅"}
+OFFLINE_ICON = {-1: "❌", 1: "📥", 2: "✅"}   # 图标须 EAW=W（用 ⬇️ 这类 EAW=N 字符部分终端会错位）
 
 
 def fmt_offline_line(t: dict) -> str:
@@ -334,7 +334,7 @@ async def cmd_download(ctx: Ctx, args) -> int:
     dest_dir = Path(args.out or ".").expanduser()
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = unique_dest(dest_dir, sanitize_name(info["file_name"] or entry_name(entry)))
-    print(f"⬇️ {info['file_name']}  {human_bytes(info['file_size'])}  ->  {dest}")
+    print(f"📥 {info['file_name']}  {human_bytes(info['file_size'])}  ->  {dest}")
     size, sha1 = await download_file(info["url"], dest, expected_size=info["file_size"],
                                      on_progress=make_progress())
     print()
@@ -385,7 +385,7 @@ async def cmd_offline_list(ctx: Ctx, args) -> int:
 async def cmd_offline_del(ctx: Ctx, args) -> int:
     if args.purge and not args.yes:
         try:
-            ans = input("⚠️ purge 会连已下载文件一起删，输入 y 确认: ").strip().lower()
+            ans = input("❗ purge 会连已下载文件一起删，输入 y 确认: ").strip().lower()
         except EOFError:
             ans = ""
         if ans != "y":
@@ -393,7 +393,7 @@ async def cmd_offline_del(ctx: Ctx, args) -> int:
             return 1
     if await ctx.cloud.raw.offline_del(args.info_hash,
                                        del_source_file=1 if args.purge else 0):
-        print(f"🗑 已删除离线任务: {args.info_hash}" + ("（含文件）" if args.purge else ""))
+        print(f"🧹 已删除离线任务: {args.info_hash}" + ("（含文件）" if args.purge else ""))
         return 0
     return 1
 
@@ -402,7 +402,7 @@ async def cmd_rm(ctx: Ctx, args) -> int:
     entries = []
     for p in args.paths:
         entries.append(await find_entry(ctx.cloud, p))
-    print(f"⚠️ 将删除以下 {len(entries)} 项（移入回收站）:")
+    print(f"❗ 将删除以下 {len(entries)} 项（移入回收站）:")
     for it in entries:
         kind = "📂" if entry_is_dir(it) else "📄"
         size = "" if entry_is_dir(it) else f"  {human_bytes(entry_size(it))}"
@@ -418,7 +418,7 @@ async def cmd_rm(ctx: Ctx, args) -> int:
     fids = [entry_fid(it) for it in entries]
     await ctx.cloud.raw.delete_files(fids)
     ctx.cloud.raw.invalidate_path_cache()
-    print(f"🗑 已删除 {len(fids)} 项（可在 115 回收站恢复）")
+    print(f"🧹 已删除 {len(fids)} 项（可在 115 回收站恢复）")
     return 0
 
 
@@ -457,12 +457,12 @@ async def cmd_df(ctx: Ctx, args) -> int:
     space = await ctx.cloud.raw.user_space()
     if space.get("total"):
         pct = space["used"] * 100 / space["total"]
-        print(f"☁️ 115 空间：{human_bytes(space['used'])} / "
+        print(f"📦 115 空间：{human_bytes(space['used'])} / "
               f"{human_bytes(space['total'])}（{pct:.1f}%）")
     quota = await ctx.cloud.raw.offline_quota()
     if quota:
-        print(f"⬇️ 离线配额：已用 {quota.get('used', '?')} / {quota.get('count', '?')}")
-    print(f"🛡️ 今日 115 API 请求：{ctx.cloud.raw.request_count}"
+        print(f"📥 离线配额：已用 {quota.get('used', '?')} / {quota.get('count', '?')}")
+    print(f"🧮 今日 115 API 请求：{ctx.cloud.raw.request_count}"
           f"（风控阈值 {ctx.cloud.raw.daily_limit}）")
     return 0
 
@@ -518,7 +518,7 @@ async def cmd_auth(ctx: Ctx, args) -> int:
         last = st
         await asyncio.sleep(2)
     if not await ctx.cloud.ensure_login():
-        print("    ⚠️ token 已保存，但探活失败（稍后可用 df 复查）")
+        print("    ❗ token 已保存，但探活失败（稍后可用 df 复查）")
         return 1
     print("    ✅ 探活成功，授权已恢复")
     return 0
@@ -532,7 +532,7 @@ async def cmd_share_save(ctx: Ctx, args) -> int:
     from cloud115.share import parse_share_link, share_list, share_receive
     cookies = ctx.cfg.share.cookies
     if not cookies:
-        print("⚠️ 未配置转存凭据（config.yaml 的 share.cookies）\n"
+        print("❗ 未配置转存凭据（config.yaml 的 share.cookies）\n"
               "浏览器登录 115 后复制 Cookie 填入即可，不影响其他功能")
         return 1
     parsed = parse_share_link(args.link)
@@ -659,7 +659,7 @@ COMMANDS: dict[str, Command] = {
 def build_parser() -> argparse.ArgumentParser:
     """顶层 + 子命令解析器。
 
-    ⚠️ --account 用 parents 挂两处：子解析器里必须 default=SUPPRESS，否则会把
+    ❗ --account 用 parents 挂两处：子解析器里必须 default=SUPPRESS，否则会把
     顶层已解析的 --account 值覆盖回默认空串（argparse 子解析器默认值会回写同名属性）。
     """
     ap = argparse.ArgumentParser(
