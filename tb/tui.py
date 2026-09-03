@@ -371,7 +371,7 @@ class FilesPage(Page):
         super().__init__()
         self.path = "/tg115bot"
         self._confirm_key: str | None = None
-        self._dl_pending: str | None = None
+        self._pending: tuple[str, str] | None = None   # (动作, 目标名)：download/rename/move/mkdir
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
     def compose(self) -> ComposeResult:
@@ -380,10 +380,10 @@ class FilesPage(Page):
         yield DataTable(id="files", cursor_type="row", zebra_stripes=True)
         yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
                     id="upload-input")
-        yield Input(placeholder=f"下载到本地目录（回车开始，Esc 取消）",
-                    id="dl-input", classes="hidden")
+        yield Input(placeholder="动作输入框", id="action-input", classes="hidden")
         yield Static("", id="dl-status", classes="hidden")
-        yield Label("回车=进入目录 · d=删除(两次确认) · s=下载选中 · r=刷新 · 输入框=上传", classes="hint")
+        yield Label("回车=进入 · d=删除(两次) · s=下载 · n=重命名 · m=移动 · +=新建 · r=刷新 · 输入框=上传",
+                    classes="hint")
 
     def on_mount(self) -> None:
         t = self.query_one("#files", DataTable)
@@ -458,35 +458,57 @@ class FilesPage(Page):
         elif event.key == "d":
             self._try_delete()
         elif event.key == "s":
-            self._start_download()
+            sel = self._selected()
+            if sel and sel[0].startswith("📂"):
+                self.app.notify_user("目录下载 v1 不支持（逐文件取直链会快速烧 API 配额）", True)
+            elif sel:
+                self._ask("download", sel[1],
+                          f"下载 {sel[1]} 到本地目录（回车开始，Esc 取消）")
+        elif event.key == "n":
+            sel = self._selected()
+            if sel:
+                self._ask("rename", sel[1],
+                          f"重命名 {sel[1]} 为（回车确认，Esc 取消）", prefill=sel[1])
+        elif event.key == "m":
+            sel = self._selected()
+            if sel:
+                self._ask("move", sel[1],
+                          f"移动 {sel[1]} 到 115 目录（不存在自动创建，Esc 取消）",
+                          prefill=self.path)
+        elif event.key in ("+", "plus"):
+            self._ask("mkdir", "",
+                      f"在 {self.path} 下新建目录（回车创建，Esc 取消）")
         elif event.key == "escape":
-            self._cancel_download()
+            self._cancel_ask()
 
-    # ── 下载（s 键）：选文件 → 弹本地目录输入 → 常驻循环上走直链+sha1 ─────
+    # ── 通用动作弹框：一个隐藏 Input 承载 download/rename/move/mkdir ─────
 
-    def _start_download(self) -> None:
+    def _selected(self) -> tuple[str, str] | None:
+        """当前光标行 (类型icon, 名字)；无效或 .. 返回 None。"""
         t = self.query_one("#files", DataTable)
         if t.cursor_row is None or t.cursor_row < 0:
-            return
+            return None
         try:
             row = t.get_row_at(t.cursor_row)
         except Exception:  # noqa: BLE001
-            return
+            return None
         name = str(row[1])
         if name == "..":
-            return
-        if str(row[0]).startswith("📂"):
-            self.app.notify_user("目录下载 v1 不支持（逐文件取直链会快速烧 API 配额），请对单文件", True)
-            return
-        self._dl_pending = name
-        inp = self.query_one("#dl-input", Input)
+            return None
+        return str(row[0]), name
+
+    def _ask(self, action: str, name: str, placeholder: str, prefill: str = "") -> None:
+        self._pending = (action, name)
+        inp = self.query_one("#action-input", Input)
+        inp.placeholder = placeholder
+        inp.value = prefill
         inp.remove_class("hidden")
         self.call_after_refresh(inp.focus)
 
-    def _cancel_download(self) -> None:
-        self._dl_pending = None
+    def _cancel_ask(self) -> None:
+        self._pending = None
         try:
-            self.query_one("#dl-input", Input).add_class("hidden")
+            self.query_one("#action-input", Input).add_class("hidden")
             self.query_one("#files", DataTable).focus()
         except Exception:  # noqa: BLE001
             pass
@@ -551,6 +573,89 @@ class FilesPage(Page):
             self.app.call_from_thread(self.app.notify_user, f"✅ 已下载到 {dest}")
         self.run_worker(dl, thread=True)
 
+    # ── 重命名 / 移动 / 新建目录：同一套「cloud 循环 + 局部刷新」模式 ─────
+
+    def _rename(self, name: str, new_name: str) -> None:
+        if not new_name or "/" in new_name:
+            self.app.notify_user("新名不能为空且不含 /", True)
+            return
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        full = self.path.rstrip("/") + "/" + name
+
+        def fill() -> None:
+            from cloud115.filesystem import find_entry
+            from scripts.manual import entry_fid
+
+            async def go():
+                entry = await find_entry(ctx.cloud, full)
+                await ctx.cloud.raw.rename_file(entry_fid(entry), new_name)
+                ctx.cloud.raw.invalidate_path_cache()
+            try:
+                self.app._cloud.submit(go()).result(60)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify_user, f"重命名失败: {e}", True)
+                return
+            self.app.call_from_thread(self.load_dir)
+            self.app.call_from_thread(self.app.notify_user, f"✅ {name} → {new_name}")
+        self.run_worker(fill, thread=True)
+
+    def _move(self, name: str, dst: str) -> None:
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        src = self.path.rstrip("/") + "/" + name
+
+        def fill() -> None:
+            from cloud115.filesystem import find_entry
+            from scripts.manual import entry_fid
+
+            async def go():
+                entry = await find_entry(ctx.cloud, src)
+                di = await ctx.cloud.raw.get_file_info(dst)
+                if di and di.get("file_id") is not None:
+                    to_cid = int(di["file_id"])
+                else:
+                    to_cid = int(await ctx.cloud.raw.create_dir_recursive(dst))
+                await ctx.cloud.raw.move_files(entry_fid(entry), to_cid)
+                ctx.cloud.raw.invalidate_path_cache()
+            try:
+                self.app._cloud.submit(go()).result(60)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify_user, f"移动失败: {e}", True)
+                return
+            self.app.call_from_thread(self.load_dir)
+            self.app.call_from_thread(self.app.notify_user, f"✅ {name} → {dst}")
+        self.run_worker(fill, thread=True)
+
+    def _mkdir(self, name: str) -> None:
+        if "/" in name.strip():
+            self.app.notify_user("目录名不含 /（逐级进入再建即可）", True)
+            return
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        target = self.path.rstrip("/") + "/" + name.strip()
+
+        def fill() -> None:
+            from cloud115.filesystem import mkdir_p
+
+            async def go():
+                await mkdir_p(ctx.cloud, target)
+                ctx.cloud.raw.invalidate_path_cache()
+            try:
+                self.app._cloud.submit(go()).result(60)
+            except Exception as e:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify_user, f"新建失败: {e}", True)
+                return
+            self.app.call_from_thread(self.load_dir)
+            self.app.call_from_thread(self.app.notify_user, f"✅ 已创建 {target}")
+        self.run_worker(fill, thread=True)
+
     def _try_delete(self) -> None:
         ctx = self.app_ctx
         t = self.query_one("#files", DataTable)
@@ -583,12 +688,21 @@ class FilesPage(Page):
             self.app.notify_user(f"再按一次 d 确认删除: {name}")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "dl-input":
+        if event.input.id == "action-input":
             raw = event.value.strip()
-            name = self._dl_pending
-            self._cancel_download()
-            if raw and name:
+            pending, self._pending = self._pending, None
+            self._cancel_ask()
+            if not raw or not pending:
+                return
+            action, name = pending
+            if action == "download":
                 self._download(name, Path(raw).expanduser())
+            elif action == "rename":
+                self._rename(name, raw)
+            elif action == "move":
+                self._move(name, raw)
+            elif action == "mkdir":
+                self._mkdir(raw)
             return
         if event.input.id != "upload-input":
             return

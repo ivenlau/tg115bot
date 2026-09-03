@@ -187,8 +187,8 @@ def test_files_page_duplicate_names_ok():
     asyncio.run(go())
 
 
-def test_files_page_download_ui():
-    """下载交互：s 键弹出本地目录输入框，Esc 收起（数据层不触网）。"""
+def test_files_page_action_inputs():
+    """通用动作弹框：s 下载 / n 重命名（预填旧名）/ Esc 收起（数据层不触网）。"""
     import asyncio
     from tb.tui import TBApp
 
@@ -204,14 +204,23 @@ def test_files_page_download_ui():
             t.add_row("📄", "a.mkv", "1G")
             t.move_cursor(row=0)
             t.focus()
-            dl = page.query_one("#dl-input")
-            assert dl.has_class("hidden")
+            inp = page.query_one("#action-input")
+            assert inp.has_class("hidden")
+            # s → 下载弹框
             await pilot.press("s")
             await pilot.pause(0.2)
-            assert not dl.has_class("hidden"), "s 应弹出下载输入框"
+            assert not inp.has_class("hidden"), "s 应弹出下载输入框"
             await pilot.press("escape")
             await pilot.pause(0.1)
-            assert dl.has_class("hidden"), "Esc 应收起下载输入框"
+            assert inp.has_class("hidden"), "Esc 应收起"
+            # n → 重命名弹框，且预填旧名
+            await pilot.press("n")
+            await pilot.pause(0.2)
+            assert not inp.has_class("hidden") and inp.value == "a.mkv", \
+                "n 应弹出重命名输入框并预填旧名"
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert inp.has_class("hidden")
     asyncio.run(go())
 
 
