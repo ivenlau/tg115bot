@@ -143,12 +143,15 @@ def do_stop() -> int:
             time.sleep(0.5)
     try:
         proc = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        proc = None
-    if proc is not None:
+        targets = [proc, *proc.children(recursive=True)]
+    except psutil.Error:
+        # NoSuchProcess 竞态：SIGTERM 后进程恰在此间隙退出（children() 也会抛，
+        # 之前的裸调用就是 TUI 点「重启」偶发崩溃面板的根因）——已死无需强杀
+        targets = []
+    if targets:
         if graceful:
             print("[!] 优雅退出超时，强制结束")
-        for p in [proc, *proc.children(recursive=True)]:
+        for p in targets:
             try:
                 p.kill()
             except psutil.Error:
@@ -179,9 +182,13 @@ def do_status() -> int:
         return 1
     import psutil
 
-    proc = psutil.Process(pid)
-    mb = proc.memory_info().rss / 1048576
-    up = time.time() - proc.create_time()
+    try:
+        proc = psutil.Process(pid)
+        mb = proc.memory_info().rss / 1048576
+        up = time.time() - proc.create_time()
+    except psutil.Error:      # 身份校验与取数之间退出的竞态：按未运行处理
+        print("[!] 未在运行（进程刚退出）")
+        return 1
     print(f"[+] 运行中 (PID {pid})  内存 {mb:.0f}MB  已运行 {_fmt_uptime(up)}")
     print(f"    安装目录: {INSTALL_DIR}")
     return 0
