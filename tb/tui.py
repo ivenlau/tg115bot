@@ -20,18 +20,17 @@ import time
 from concurrent.futures import Future
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
                              ListView, ListItem, RichLog, Static, Switch,
                              TabbedContent, TabPane, TextArea)
-from rich.text import Text
 
 from tb import service
 
 NAV_ITEMS = [("📊", "仪表盘"), ("📁", "文件"), ("⏬", "离线任务"),
              ("⚙️", "配置"), ("📜", "日志")]
-PAGES = [name for _, name in NAV_ITEMS]
 
 
 def _post(app, fn, *args, **kwargs):
@@ -132,9 +131,8 @@ class TBApp(App):
     .page-title { text-style: bold; color: $text; margin-bottom: 1; }
     .hint { color: $text-muted; margin-top: 1; }
     .hidden { display: none; }
-    #dash-cards { height: auto; margin-bottom: 1; }
-    .dash-card { width: 1fr; height: auto; min-height: 5; padding: 0 1; margin-right: 1; background: $panel; border: round $primary-darken-1; }
-    .dash-card:last-child { margin-right: 0; }
+    #dash-cards { layout: grid; grid-size: 2 2; grid-gutter: 0 1; height: auto; margin-bottom: 1; }
+    .dash-card { width: 1fr; height: auto; min-height: 5; padding: 0 1; background: $panel; border: round $primary-darken-1; }
     .dash-card.ok { border: round $success; }
     .dash-card.down { border: round $error; }
     #svc-btns { height: auto; margin: 1 0; }
@@ -221,7 +219,7 @@ class TBApp(App):
     def _refresh_side(self) -> None:
         """侧栏底部小卡：账号 + 服务状态圆点（5s 刷新，与仪表盘同节奏）。"""
         if self.ctx is not None:
-            acct = f"👤 {self.ctx.account.name}"
+            acct = f"👤 {_plain(self.ctx.account.name)}"
         elif self.ctx_error:
             acct = f"⚠️ {_plain(self.ctx_error)[:36]}"
         else:
@@ -309,7 +307,7 @@ def _plain(s) -> str:
 class DashboardPage(Page):
     def compose(self) -> ComposeResult:
         yield Label("📊 仪表盘", classes="page-title")
-        with Horizontal(id="dash-cards"):
+        with Container(id="dash-cards"):
             yield Static("", id="card-svc", classes="dash-card")
             yield Static("", id="card-disk", classes="dash-card")
             yield Static("", id="card-cloud", classes="dash-card")
@@ -346,20 +344,24 @@ class DashboardPage(Page):
             card.update("[dim]服务[/dim]\n🔴 [bold red]未运行[/bold red]"
                         "\n[dim]点下方「启动」[/dim]")
             return
-        detail = f"PID {pid}"
+        value = f"🟢 [bold green]运行中[/bold green]  PID {pid}"
+        detail = ""
         try:
             import psutil
             p = psutil.Process(pid)
             mb = p.memory_info().rss / 1048576
             up = time.time() - p.create_time()
             d, rem = divmod(int(up), 86400)
-            up_s = f"{d}d {rem // 3600:02d}:{rem % 3600 // 60:02d}:{rem % 60:02d}"
-            detail += f" · 内存 {mb:.0f}MB · 已运行 {up_s}"
+            # 到分钟 + PID 挪到主值行：三行文案在 2×2 窄卡片里都不换行，卡等高
+            up_s = f"{d}d{rem // 3600:02d}:{rem % 3600 // 60:02d}"
+            detail = f"{mb:.0f}MB · 已运行 {up_s}"
         except Exception:  # noqa: BLE001 -- 进程刚退出等瞬时态：只显示 PID
             pass
         card.remove_class("down").add_class("ok")
-        card.update(f"[dim]服务[/dim]\n🟢 [bold green]运行中[/bold green]"
-                    f"\n[dim]{detail}[/dim]")
+        body = f"[dim]服务[/dim]\n{value}"
+        if detail:
+            body += f"\n[dim]{detail}[/dim]"
+        card.update(body)
 
     def _card_disk(self) -> None:
         card = self.query_one("#card-disk", Static)
@@ -422,7 +424,8 @@ class DashboardPage(Page):
                                 f"\n🛡 [bold]{rc}[/bold] / {dl}"
                                 f"\n[dim]{detail}[/dim]")
             _post(self.app, apply)
-        self.run_worker(fill, thread=True)
+        # exclusive：网络黑洞时旧 worker 未超时前不叠新 worker（与 dash-tasks 同策）
+        self.run_worker(fill, thread=True, group="dash-cloud", exclusive=True)
 
     # ── 最近任务（tasks 表倒序；WAL 并发读安全） ─────────────────────────
 
@@ -451,13 +454,16 @@ class DashboardPage(Page):
                     style = TASK_STYLE.get(r.status, "")
                     st = Text(f"{TASK_ICON.get(r.status, '')} {TASK_LABEL.get(r.status, r.status)}",
                               style=style)
-                    pct = getattr(r, "progress", -1)
+                    pct = getattr(r, "progress", -1)   # bot 侧节流落库的实时进度
                     if r.status in ("downloading", "uploading") and 0 <= pct < 100:
                         pg = Text(f"{_pct_bar(pct)} {pct:.0f}%", style=style or "cyan")
                     else:
-                        pg = ""          # bot 侧节流落库的实时进度
+                        pg = ""
                     via = (r.method or r.source or "").strip()
-                    t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, pg, via)
+                    # 文件名用 Text 裸文本：str 单元格会被 from_markup 解析，
+                    # 字幕组命名（[Group][1080p].mkv）里未闭合 [x 会吞掉半截名字
+                    t.add_row(tm, Text(r.filename or "?"),
+                              human_bytes(r.size or 0), st, pg, via)
             _post(self.app, apply)
         self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
 
