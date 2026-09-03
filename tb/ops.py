@@ -11,11 +11,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from tb import INSTALL_DIR, VERSION
 
 SCRIPTS = INSTALL_DIR / "scripts"
+CONFIG_FILE = INSTALL_DIR / "config.yaml"
 
 
 def _spawn_interactive(cmd: list[str]) -> int:
@@ -86,6 +88,70 @@ def cmd_version() -> int:
     print(f"  安装目录: {INSTALL_DIR}")
     print(f"  Python:   {sys.version.split()[0]} ({sys.executable})")
     return 0
+
+
+# ── 配置编辑（TUI 配置页；路径参数化便于测试，默认真实 config.yaml） ─────
+
+def validate_config_text(text: str) -> tuple[bool, str]:
+    """双重校验，不落盘：YAML 语法 → pydantic 模型（AppConfig）。"""
+    import yaml
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        return False, f"YAML 语法错误: {e}"
+    if not isinstance(data, dict):
+        return False, "顶层结构应为键值映射（段名: 值）"
+    try:
+        from config import AppConfig
+        AppConfig(**data)
+    except Exception as e:  # noqa: BLE001 -- pydantic ValidationError
+        return False, f"配置校验失败: {e}"
+    return True, "OK"
+
+
+def write_config_text(text: str, path: Path | None = None) -> Path:
+    """全文写回（先备份 config.yaml.bak.<时间戳>）。调用前应已 validate 通过。
+
+    写用户看到的原文而非 yaml 重导出——保留注释与排版，零丢失。
+    """
+    p = path or CONFIG_FILE
+    if p.exists():
+        bak = p.with_name(p.name + ".bak." + time.strftime("%Y%m%d%H%M%S"))
+        shutil.copy2(p, bak)
+    if not text.endswith("\n"):
+        text += "\n"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def set_config_key(dotted: str, value, path: Path | None = None) -> tuple[bool, str]:
+    """改一个键：yaml 往返（保键序/中文/未知键）+ pydantic 校验后落盘。
+
+    开关类快捷修改用；校验失败不落盘。与 manual.py/init.ps1 的写法同族。
+    """
+    import yaml
+    p = path or CONFIG_FILE
+    try:
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except OSError as e:
+        return False, f"读取失败: {e}"
+    if not isinstance(data, dict):
+        return False, "现有配置顶层不是键值映射，请改用编辑器整文修改"
+    node = data
+    keys = dotted.split(".")
+    for k in keys[:-1]:
+        if not isinstance(node.get(k), dict):
+            node[k] = {}
+        node = node[k]
+    node[keys[-1]] = value
+    try:
+        from config import AppConfig
+        AppConfig(**data)
+    except Exception as e:  # noqa: BLE001
+        return False, f"校验失败（未落盘）: {e}"
+    p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                 encoding="utf-8")
+    return True, "OK"
 
 
 # ── doctor：一键体检 ────────────────────────────────────────────────────

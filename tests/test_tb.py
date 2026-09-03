@@ -162,142 +162,50 @@ def test_cloud_loop_single_loop_for_session():
         cl.stop()
 
 
-def test_files_page_duplicate_names_ok():
-    """回归：同名条目（115 列表「递归混入」形态）不得炸 DuplicateKey。
-
-    旧实现按文件名作 row key → 同名即崩；修复后不指定 key（自动生成）。
-    同时验证 .. 行可被识别为目录（回车回上级的判定依据）。
-    """
-    import asyncio
-    from tb.tui import TBApp
-
-    async def go():
-        app = TBApp()
-        async with app.run_test(size=(110, 32)) as pilot:
-            await pilot.pause(0.2)
-            app.query_one("#nav").index = 1      # -> 文件页
-            await pilot.pause(0.5)
-            page = app.query_one("#content FilesPage")
-            t = page.query_one("#files")
-            t.clear()
-            t.add_row("📂", "..", "")
-            t.add_row("📄", "same.mkv", "1G")    # 两条同名 —— 旧实现在此 DuplicateKey
-            t.add_row("📄", "same.mkv", "2G")
-            assert t.row_count == 3
-    asyncio.run(go())
 
 
-def test_files_page_action_inputs():
-    """通用动作弹框：s 下载 / n 重命名（预填旧名）/ Esc 收起（数据层不触网）。"""
-    import asyncio
-    from tb.tui import TBApp
-
-    async def go():
-        app = TBApp()
-        async with app.run_test(size=(110, 32)) as pilot:
-            await pilot.pause(0.2)
-            app.query_one("#nav").index = 1      # -> 文件页
-            await pilot.pause(0.5)
-            page = app.query_one("#content FilesPage")
-            t = page.query_one("#files")
-            t.clear()
-            t.add_row("📄", "a.mkv", "1G")
-            t.move_cursor(row=0)
-            t.focus()
-            inp = page.query_one("#action-input")
-            assert inp.has_class("hidden")
-            # s → 下载弹框
-            await pilot.press("s")
-            await pilot.pause(0.2)
-            assert not inp.has_class("hidden"), "s 应弹出下载输入框"
-            await pilot.press("escape")
-            await pilot.pause(0.1)
-            assert inp.has_class("hidden"), "Esc 应收起"
-            # n → 重命名弹框，且预填旧名
-            await pilot.press("n")
-            await pilot.pause(0.2)
-            assert not inp.has_class("hidden") and inp.value == "a.mkv", \
-                "n 应弹出重命名输入框并预填旧名"
-            await pilot.press("escape")
-            await pilot.pause(0.1)
-            assert inp.has_class("hidden")
-    asyncio.run(go())
 
 
-def test_dashboard_service_buttons_stub():
-    """仪表盘服务按钮：打桩 do_start/do_stop，按钮触发即调用（不真启停）。"""
-    import asyncio
-    from tb import service as tb_service
-    from tb.tui import TBApp
+def test_config_edit_helpers():
+    """validate/write/set_config_key：双重校验、备份、失败不落盘。"""
+    from tb import ops
 
-    calls = []
-    _orig = {n: getattr(tb_service, n) for n in ("do_start", "do_stop", "do_restart")}
-    tb_service.do_start = lambda: (calls.append("start"), 0)[1]
-    tb_service.do_stop = lambda: (calls.append("stop"), 0)[1]
-    tb_service.do_restart = lambda: (calls.append("restart"), 0)[1]
+    good = ("telegram:\n"
+            "  api_id: 1234567\n"
+            "  api_hash: \"abc\"\n"
+            "  bot_token: \"123:ABC\"\n"
+            "  proxy: \"\"\n"
+            "upload:\n  target_dir: /tg115bot\n"
+            "web:\n  enable: false\n")
+    ok, msg = ops.validate_config_text(good)
+    assert ok, msg
+    ok, _ = ops.validate_config_text("telegram: [unclosed")
+    assert not ok                                    # YAML 语法错
+    ok, _ = ops.validate_config_text("telegram: 123")
+    assert not ok                                    # pydantic 类型错
+
+    tmp = Path(tempfile.mkdtemp())
     try:
-        async def go():
-            from textual.widgets import Button
-            app = TBApp()
-            async with app.run_test(size=(110, 34)) as pilot:
-                await pilot.pause(0.4)
-                page = app.query_one("#content DashboardPage")
-                assert app.query("#content #tasks")          # 任务表存在
-                page.query_one("#btn-start", Button).press()
-                await pilot.pause(0.5)
-                page.query_one("#btn-stop", Button).press()
-                await pilot.pause(0.5)
-                assert calls == ["start", "stop"], calls
-        asyncio.run(go())
+        p = tmp / "config.yaml"
+        p.write_text(good, encoding="utf-8")
+        # 全文写回：自动备份 + 原文落盘（含尾随换行）
+        ops.write_config_text(good.rstrip("\n"), p)
+        baks = list(tmp.glob("config.yaml.bak.*"))
+        assert len(baks) == 1 and p.read_text(encoding="utf-8").endswith("\n")
+        # 改键：布尔落盘正确
+        ok, msg = ops.set_config_key("web.enable", True, p)
+        assert ok, msg
+        import yaml
+        assert yaml.safe_load(p.read_text(encoding="utf-8"))["web"]["enable"] is True
+        # 改键非法值：校验失败、文件不变
+        before = p.read_text(encoding="utf-8")
+        ok, _ = ops.set_config_key("web.enable", "不是布尔", p)
+        assert not ok
+        assert p.read_text(encoding="utf-8") == before
     finally:
-        for n, f in _orig.items():               # 还原打桩的函数
-            setattr(tb_service, n, f)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_dashboard_doctor_stub():
-    """诊断按钮：doctor_checks 打桩后渲染到 #doctor-out。"""
-    import asyncio
-    from tb import ops as tb_ops
-    from tb.tui import TBApp
-
-    orig = tb_ops.doctor_checks
-    tb_ops.doctor_checks = lambda: [("假项", True, "ok"), ("坏项", False, "boom")]
-    try:
-        async def go():
-            app = TBApp()
-            async with app.run_test(size=(110, 34)) as pilot:
-                await pilot.pause(0.4)
-                page = app.query_one("#content DashboardPage")
-                out = page.query_one("#doctor-out")
-                assert out.has_class("hidden")
-                page.query_one("#btn-doctor").press()
-                await pilot.pause(0.5)
-                assert not out.has_class("hidden")
-                region = out.render() if hasattr(out, "render") else None
-                # 拿渲染文本验证（Static.render 是富文本，取 str）
-                text = str(out.render())
-                assert "假项" in text and "坏项" in text and "❌" in text
-        asyncio.run(go())
-    finally:
-        tb_ops.doctor_checks = orig
-
-
-def test_tui_app_headless():
-    """Textual 无头启动：组合/翻页不炸（数据层不可用时应优雅降级）。"""
-    import asyncio
-    from tb.tui import TBApp
-
-    async def go():
-        app = TBApp()
-        async with app.run_test(size=(110, 32)) as pilot:
-            await pilot.pause(0.3)
-            assert app.query("#content DashboardPage")
-            lv = app.query_one("#nav")
-            for idx, expect in ((3, "LogPage"), (4, "AuthPage"), (1, "FilesPage")):
-                lv.index = idx
-                await pilot.pause(0.4)
-                assert app.query(f"#content {expect}"), expect
-    asyncio.run(go())
 
 
 if __name__ == "__main__":

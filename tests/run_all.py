@@ -22,6 +22,7 @@ MODULES = [
     "tests.test_oss_protocol",
     "tests.test_manual_tools",
     "tests.test_tb",
+    "tests.test_tui",
 ]
 
 

@@ -23,11 +23,20 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
-                             ListView, ListItem, RichLog, Static)
+                             ListView, ListItem, RichLog, Static, Switch,
+                             TabbedContent, TabPane, TextArea)
 
 from tb import service
 
-PAGES = ["仪表盘", "文件", "离线任务", "日志", "授权"]
+PAGES = ["仪表盘", "文件", "离线任务", "日志", "配置"]
+
+
+def _post(app, fn, *args, **kwargs):
+    """call_from_thread 安全包装：应用退出竞态时静默丢弃（worker 不因它炸）。"""
+    try:
+        app.call_from_thread(fn, *args, **kwargs)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _qr_ascii(data: str) -> str:
@@ -54,6 +63,9 @@ class _CloudLoop:
     def __init__(self) -> None:
         self.loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
+        self._stopped = False
+        self._tasks: set = set()        # 在跑协程任务（stop 时真取消，防退出挂死）
+        self._futures: set = set()      # 提交的 concurrent future（未启动的可直接 cancel）
         self._thread = threading.Thread(target=self._run, name="tb-cloud", daemon=True)
         self._thread.start()
 
@@ -62,16 +74,44 @@ class _CloudLoop:
         asyncio.set_event_loop(self.loop)
         self._ready.set()
         self.loop.run_forever()
+        # 收尾排空：让被取消的任务/异步生成器（aiohttp）完成，再关循环
+        try:
+            self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+        except Exception:  # noqa: BLE001
+            pass
         self.loop.close()
+
+    async def _tracked(self, coro):
+        task = asyncio.current_task()
+        self._tasks.add(task)
+        try:
+            return await coro
+        finally:
+            self._tasks.discard(task)
 
     def submit(self, coro) -> Future:
         self._ready.wait(5)
-        assert self.loop is not None
-        return asyncio.run_coroutine_threadsafe(coro, self.loop)
+        if self._stopped or self.loop is None or not self.loop.is_running():
+            coro.close()          # 防未 await 警告
+            raise RuntimeError("cloud 循环已停止")
+        fut = asyncio.run_coroutine_threadsafe(self._tracked(coro), self.loop)
+        self._futures.add(fut)
+        fut.add_done_callback(self._futures.discard)
+        return fut
 
     def stop(self) -> None:
+        self._stopped = True
         if self.loop is not None and self.loop.is_running():
-            self.loop.call_soon_threadsafe(self.loop.stop)
+            def _cancel_and_stop() -> None:
+                for t in list(self._tasks):     # 在跑的上传/轮询/初始化全部取消
+                    t.cancel()
+                for f in list(self._futures):   # 未启动的直接取消
+                    f.cancel()
+                # 关键：下一轮再停——cancel 只标记，CancelledError 的送达需要
+                # 再跑一轮循环；同轮立即 stop 会让 future 永不完成（worker 卡满
+                # 超时、进程退出挂死的根因）
+                self.loop.call_soon(self.loop.stop)
+            self.loop.call_soon_threadsafe(_cancel_and_stop)
 
 
 class TBApp(App):
@@ -90,6 +130,12 @@ class TBApp(App):
     #svc-btns { height: auto; margin: 1 0; }
     #svc-btns Button { margin-right: 1; }
     #doctor-out { padding-top: 1; margin-bottom: 1; }
+    #cfg-switches { height: auto; margin: 0 0 1 0; }
+    #cfg-switches Switch { margin: 0 1 0 0; }
+    #cfg-switches Label { margin: 0 2 0 0; }
+    #cfg-text { height: 1fr; }
+    #cfg-btns { height: auto; margin: 1 0; }
+    #cfg-btns Button { margin-right: 1; }
     #dl-status { color: $text-muted; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; }
@@ -115,36 +161,43 @@ class TBApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.run_worker(self._build_ctx, thread=True, exclusive=True)
+        # 初始化整体投给常驻循环 fire-and-forget：退出时可被真取消，不占线程
+        # worker——消除「退出时 worker 卡 .result 拖死进程」的一整类问题
+        self._cloud.submit(self._init_all())
         self.query_one("#nav", ListView).index = 0   # 触发 Highlighted -> 挂载首页
 
-    def _build_ctx(self) -> None:
-        """线程 worker：在常驻 115 循环上建上下文（need_login=False，未授权可去授权页扫码）。"""
+    async def _init_all(self) -> None:
+        """建 115 上下文 + DB 句柄（need_login=False，未授权可去配置页扫码）。"""
         from scripts import manual
 
         try:
             cfg = manual.load_config()
         except Exception as e:  # noqa: BLE001
             self.ctx_error = f"配置加载失败: {e}（tb init）"
-            self._side_status(self.ctx_error)
+            _post(self, self._side_status, self.ctx_error)
             return
 
         try:
-            self.ctx = self._cloud.submit(
-                manual.build_ctx(cfg, self.account, need_login=False)).result(30)
+            ctx = await manual.build_ctx(cfg, self.account, need_login=False)
         except Exception as e:  # noqa: BLE001
             self.ctx_error = str(e)
-            self._side_status(self.ctx_error)
+            _post(self, self._side_status, self.ctx_error)
             return
         # 任务列表数据源（WAL 并发读安全；失败则仪表盘任务区静默降级）
+        db = None
         try:
             from persistence.db import Database
             db = Database(cfg.db_path)
-            self._cloud.submit(db.init()).result(15)
-            self.db = db
+            await db.init()
         except Exception:  # noqa: BLE001
-            pass
-        self._side_status(f"账号 {self.ctx.account.name}")
+            if db is not None:
+                try:
+                    await db.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            db = None
+        self.ctx, self.db = ctx, db
+        _post(self, self._side_status, f"账号 {ctx.account.name}")
 
     def _side_status(self, text: str) -> None:
         try:
@@ -160,7 +213,7 @@ class TBApp(App):
 
     def _show_page(self, idx: int) -> None:
         content = self.query_one("#content", Container)
-        page_cls = [DashboardPage, FilesPage, OfflinePage, LogPage, AuthPage][idx]
+        page_cls = [DashboardPage, FilesPage, OfflinePage, LogPage, ConfigPage][idx]
 
         async def _swap() -> None:
             await content.remove_children()
@@ -280,7 +333,7 @@ class DashboardPage(Page):
                     except Exception as e:  # noqa: BLE001
                         lines.append(f"☁️ 115          未授权或不可达（{e}）→ 去「配置」页扫码")
                 self.app._cloud.submit(go()).result(60)
-                self.app.call_from_thread(
+                _post(self.app, 
                     self.query_one("#dash", Static).update, "\n".join(lines))
             self.run_worker(fill, thread=True)
         self._refresh_tasks()
@@ -313,7 +366,7 @@ class DashboardPage(Page):
                     st = f"{icon} {r.status}" if r.status in ("downloading", "uploading", "queued") else icon
                     via = (r.method or r.source or "").strip()
                     t.add_row(tm, r.filename or "?", human_bytes(r.size or 0), st, via)
-            self.app.call_from_thread(apply)
+            _post(self.app, apply)
         self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
 
     # ── 服务控制（线程 worker；exclusive 防连点竞态） ─────────────────────
@@ -332,11 +385,11 @@ class DashboardPage(Page):
 
     def _svc_action(self, label: str, fn) -> None:
         def run() -> None:
-            self.app.call_from_thread(self._set_buttons, False)
+            _post(self.app, self._set_buttons, False)
             rc = fn()
-            self.app.call_from_thread(self._set_buttons, True)
-            self.app.call_from_thread(self.refresh_dash)
-            self.app.call_from_thread(
+            _post(self.app, self._set_buttons, True)
+            _post(self.app, self.refresh_dash)
+            _post(self.app, 
                 self.app.notify_user,
                 f"{label}完成" if rc == 0 else f"{label}失败（exit {rc}）",
                 error=bool(rc))
@@ -360,7 +413,7 @@ class DashboardPage(Page):
                 out = self.query_one("#doctor-out", Static)
                 out.remove_class("hidden")
                 out.update("\n".join(lines))
-            self.app.call_from_thread(apply)
+            _post(self.app, apply)
         self.run_worker(run, thread=True, group="doctor", exclusive=True)
 
 
@@ -422,7 +475,7 @@ class FilesPage(Page):
             try:
                 rows = self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001 -- 网络/授权问题不炸 worker
-                self.app.call_from_thread(err, f"加载失败: {e}")
+                _post(self.app, err, f"加载失败: {e}")
                 return
 
             def apply() -> None:
@@ -435,7 +488,7 @@ class FilesPage(Page):
                     t.add_row(*r)              # 不指定 key：115 列表的「递归混入」形态
                                                  # 会出现同名条目，按名作 key 会 DuplicateKey
                 self.query_one("#files-path", Static).update(self.path)
-            self.app.call_from_thread(apply)
+            _post(self.app, apply)
         self.run_worker(fill, thread=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -531,7 +584,7 @@ class FilesPage(Page):
             last[0] = now
             from core.progress import human_bytes
             pct = f" {written * 100 // total}%" if total else ""
-            self.app.call_from_thread(status.update,
+            _post(self.app, status.update,
                                       f"⬇️ {name}  {human_bytes(written)}{pct}")
 
         def dl() -> None:
@@ -558,19 +611,19 @@ class FilesPage(Page):
             try:
                 info, dest, size, sha1 = self.app._cloud.submit(go()).result()
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(status.update, f"❌ 下载失败: {e}")
-                self.app.call_from_thread(self.app.notify_user, f"下载失败: {e}", True)
+                _post(self.app, status.update, f"❌ 下载失败: {e}")
+                _post(self.app, self.app.notify_user, f"下载失败: {e}", True)
                 return
             part = dest.with_name(dest.name + ".part")
             if info.get("sha1") and sha1 != info["sha1"]:
-                self.app.call_from_thread(
+                _post(self.app, 
                     status.update, f"❌ SHA1 不符，现场保留: {part.name}")
-                self.app.call_from_thread(self.app.notify_user, "SHA1 不符，已保留 .part", True)
+                _post(self.app, self.app.notify_user, "SHA1 不符，已保留 .part", True)
                 return
             part.rename(dest)
-            self.app.call_from_thread(
+            _post(self.app, 
                 status.update, f"✅ {dest.name}  {human_bytes(size)}  ->  {dest}")
-            self.app.call_from_thread(self.app.notify_user, f"✅ 已下载到 {dest}")
+            _post(self.app, self.app.notify_user, f"✅ 已下载到 {dest}")
         self.run_worker(dl, thread=True)
 
     # ── 重命名 / 移动 / 新建目录：同一套「cloud 循环 + 局部刷新」模式 ─────
@@ -596,10 +649,10 @@ class FilesPage(Page):
             try:
                 self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify_user, f"重命名失败: {e}", True)
+                _post(self.app, self.app.notify_user, f"重命名失败: {e}", True)
                 return
-            self.app.call_from_thread(self.load_dir)
-            self.app.call_from_thread(self.app.notify_user, f"✅ {name} → {new_name}")
+            _post(self.app, self.load_dir)
+            _post(self.app, self.app.notify_user, f"✅ {name} → {new_name}")
         self.run_worker(fill, thread=True)
 
     def _move(self, name: str, dst: str) -> None:
@@ -625,10 +678,10 @@ class FilesPage(Page):
             try:
                 self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify_user, f"移动失败: {e}", True)
+                _post(self.app, self.app.notify_user, f"移动失败: {e}", True)
                 return
-            self.app.call_from_thread(self.load_dir)
-            self.app.call_from_thread(self.app.notify_user, f"✅ {name} → {dst}")
+            _post(self.app, self.load_dir)
+            _post(self.app, self.app.notify_user, f"✅ {name} → {dst}")
         self.run_worker(fill, thread=True)
 
     def _mkdir(self, name: str) -> None:
@@ -650,10 +703,10 @@ class FilesPage(Page):
             try:
                 self.app._cloud.submit(go()).result(60)
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify_user, f"新建失败: {e}", True)
+                _post(self.app, self.app.notify_user, f"新建失败: {e}", True)
                 return
-            self.app.call_from_thread(self.load_dir)
-            self.app.call_from_thread(self.app.notify_user, f"✅ 已创建 {target}")
+            _post(self.app, self.load_dir)
+            _post(self.app, self.app.notify_user, f"✅ 已创建 {target}")
         self.run_worker(fill, thread=True)
 
     def _try_delete(self) -> None:
@@ -680,7 +733,7 @@ class FilesPage(Page):
                     await ctx.cloud.raw.delete_files([entry_fid(entry)])
                     ctx.cloud.raw.invalidate_path_cache()
                 self.app._cloud.submit(go()).result(60)
-                self.app.call_from_thread(self.load_dir)
+                _post(self.app, self.load_dir)
             self.run_worker(fill, thread=True)
             self.app.notify_user(f"🗑 已删除 {name}（回收站可恢复）")
         else:
@@ -722,7 +775,7 @@ class FilesPage(Page):
             async def go():
                 files, bases, missing = manual.expand_sources([src])
                 for m in missing:
-                    self.app.call_from_thread(self.app.notify_user, f"❌ {m}", True)
+                    _post(self.app, self.app.notify_user, f"❌ {m}", True)
                 for f in files:
                     rel = f.relative_to(bases[f]).parent
                     remote = (self.path.rstrip("/")
@@ -730,12 +783,12 @@ class FilesPage(Page):
                     size, sha1 = await manual.sha1_of(f)
                     result = await upload_to_dir(ctx.cloud, f, size, sha1, remote, f.name,
                                                  oss_concurrency=8)
-                    self.app.call_from_thread(
+                    _post(self.app, 
                         self.app.notify_user, f"✅ {f.name} ({result.method})")
             try:
                 self.app._cloud.submit(go()).result()
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify_user, f"上传失败: {e}", True)
+                _post(self.app, self.app.notify_user, f"上传失败: {e}", True)
         self.run_worker(up, thread=True)
         self.app.notify_user(f"开始上传: {src}")
 
@@ -781,9 +834,9 @@ class OfflinePage(Page):
             try:
                 rows = self.app._cloud.submit(go()).result(120)
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify_user, f"离线列表加载失败: {e}", True)
+                _post(self.app, self.app.notify_user, f"离线列表加载失败: {e}", True)
                 return
-            self.app.call_from_thread(apply, rows)
+            _post(self.app, apply, rows)
         self.run_worker(fill, thread=True)
 
     def on_key(self, event) -> None:  # noqa: BLE001
@@ -809,7 +862,7 @@ class OfflinePage(Page):
             async def go():
                 await ctx.cloud.raw.offline_del(ih, del_source_file=1)
             self.app._cloud.submit(go()).result(60)
-            self.app.call_from_thread(self.refresh_list)
+            _post(self.app, self.refresh_list)
         self.run_worker(fill, thread=True)
         self.app.notify_user(f"🗑 已删离线任务 {ih}…")
 
@@ -830,7 +883,7 @@ class OfflinePage(Page):
             async def go():
                 await ctx.cloud.raw.offline_add(url, save)
             self.app._cloud.submit(go()).result(60)
-            self.app.call_from_thread(self.refresh_list)
+            _post(self.app, self.refresh_list)
         self.run_worker(fill, thread=True)
         self.app.notify_user("已提交离线任务")
 
@@ -874,19 +927,130 @@ class LogPage(Page):
             pass
 
 
-# ── 扫码授权 ────────────────────────────────────────────────────────────
+# ── 配置页（参数编辑 + 115 授权子功能） ─────────────────────────────────
 
-class AuthPage(Page):
+class ConfigPage(Page):
+    def __init__(self) -> None:
+        super().__init__()
+        from tb import ops
+        self.cfg_path = ops.CONFIG_FILE     # 测试可重定向到临时文件
+
+    def compose(self) -> ComposeResult:
+        yield Label("配置", classes="page-title")
+        with TabbedContent():
+            with TabPane("参数"):
+                with Horizontal(id="cfg-switches"):
+                    yield Switch(value=False, id="sw-web")
+                    yield Label("Web 台")
+                    yield Switch(value=False, id="sw-keep")
+                    yield Label("本地副本")
+                    yield Switch(value=False, id="sw-chan")
+                    yield Label("频道监控")
+                yield TextArea("", id="cfg-text", show_line_numbers=True)
+                with Horizontal(id="cfg-btns"):
+                    yield Button("保存并校验", id="cfg-save", variant="primary")
+                    yield Button("重新加载", id="cfg-reload")
+                    yield Button("重启服务", id="cfg-restart", variant="warning")
+                yield Static("", id="cfg-status")
+                yield Label("保存为全文写回（自动备份 config.yaml.bak.<时间戳>）；"
+                            "大部分参数需重启服务生效", classes="hint")
+            with TabPane("115 授权"):
+                yield AuthSection()
+
+    def on_mount(self) -> None:
+        self._reload()
+        # 开关初值来自当前配置
+        try:
+            from scripts import manual
+            cfg = manual.load_config()
+            self.query_one("#sw-web", Switch).value = bool(cfg.web.enable)
+            self.query_one("#sw-keep", Switch).value = bool(cfg.storage.keep_local)
+            self.query_one("#sw-chan", Switch).value = bool(cfg.channel_monitor.enabled)
+        except Exception as e:  # noqa: BLE001
+            self._status(f"⚠️ 配置读取失败: {e}")
+
+    def _status(self, text: str, error: bool = False) -> None:
+        s = self.query_one("#cfg-status", Static)
+        s.update(("❌ " if error else "") + text)
+
+    def _reload(self) -> None:
+        try:
+            self.query_one("#cfg-text", TextArea).text = \
+                self.cfg_path.read_text(encoding="utf-8")
+            self._status("已加载（未修改）")
+        except OSError as e:
+            self._status(f"读取失败: {e}（先 tb init）", error=True)
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        mapping = {"sw-web": ("web.enable", "Web 台"),
+                   "sw-keep": ("storage.keep_local", "本地副本"),
+                   "sw-chan": ("channel_monitor.enabled", "频道监控")}
+        if event.switch.id not in mapping:
+            return
+        key, label = mapping[event.switch.id]
+        from tb import ops
+        ok, msg = ops.set_config_key(key, event.value, self.cfg_path)
+        if ok:
+            self._status(f"✅ {label} = {'开' if event.value else '关'}（已写盘，重启生效）")
+            self._reload()      # 开关走 yaml 往返，编辑器同步磁盘最新
+        else:
+            self._status(f"{label} 修改失败: {msg}", error=True)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "cfg-save":
+            from tb import ops
+            text = self.query_one("#cfg-text", TextArea).text
+            ok, msg = ops.validate_config_text(text)
+            if not ok:
+                self._status(f"未保存——{msg}", error=True)
+                return
+            try:
+                ops.write_config_text(text, self.cfg_path)
+                self._status("✅ 已保存并通过校验（大部分参数重启服务后生效）")
+            except OSError as e:
+                self._status(f"写盘失败: {e}", error=True)
+        elif bid == "cfg-reload":
+            self._reload()
+        elif bid == "cfg-restart":
+            btn = event.button
+
+            def run() -> None:
+                rc = service.do_restart()
+                _post(self.app, 
+                    self.app.notify_user,
+                    "重启完成" if rc == 0 else f"重启失败（exit {rc}）", error=bool(rc))
+
+                def enable() -> None:
+                    btn.disabled = False
+                _post(self.app, enable)
+            btn.disabled = True
+            self.run_worker(run, thread=True, group="svc", exclusive=True)
+
+
+class AuthSection(Vertical):
+    """115 扫码授权（原独立授权页，现为配置页的子 Tab）。"""
+
     def compose(self) -> ComposeResult:
         yield Label("115 扫码授权", classes="page-title")
+        yield Static("", id="auth-state")
         yield Button("生成二维码（强刷 token）", id="auth-btn", variant="primary")
         yield Static("点击按钮开始。用 115 APP 扫码；深色背景扫不动时 QR_INVERT=0 重进。",
                      id="auth-qr")
 
+    def on_mount(self) -> None:
+        try:
+            from scripts import manual
+            cfg = manual.load_config()
+            names = ", ".join(a.name for a in cfg.accounts) or "（config.accounts 为空）"
+            self.query_one("#auth-state", Static).update(f"👤 账号: {names}")
+        except Exception as e:  # noqa: BLE001
+            self.query_one("#auth-state", Static).update(f"⚠️ {e}")
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "auth-btn":
             return
-        ctx = self.app_ctx
+        ctx = self.app.ctx
         static = self.query_one("#auth-qr", Static)
         if ctx is None:
             static.update(f"❌ {self.app.ctx_error or '初始化中…'}（先 tb init）")
@@ -897,31 +1061,31 @@ class AuthPage(Page):
             async def go():
                 api = ctx.cloud.raw
                 qr = await api.start_qr_auth()
-                self.app.call_from_thread(static.update,
+                _post(self.app, static.update,
                                           _qr_ascii(qr["qrcode"]) + "\n请用 115 APP 扫描…")
                 await asyncio.sleep(5)
                 while True:
                     st = await api.poll_qr_status(qr["uid"], qr["time"], qr["sign"])
                     if st == 2:
                         await api.exchange_qr_token(qr["uid"], qr["verifier"])
-                        self.app.call_from_thread(static.update, "✅ 授权成功，token 已保存")
-                        self.app.call_from_thread(self.app.notify_user, "115 授权成功 ✅")
+                        _post(self.app, static.update, "✅ 授权成功，token 已保存")
+                        _post(self.app, self.app.notify_user, "115 授权成功 ✅")
                         return
                     if st == -1:
-                        self.app.call_from_thread(static.update, "❌ 二维码已过期，点按钮重新生成")
+                        _post(self.app, static.update, "❌ 二维码已过期，点按钮重新生成")
                         return
                     if st == -2:
-                        self.app.call_from_thread(static.update, "❌ 你在 APP 里取消了授权")
+                        _post(self.app, static.update, "❌ 你在 APP 里取消了授权")
                         return
                     await asyncio.sleep(3)
             try:
                 self.app._cloud.submit(go()).result()
             except Exception as e:  # noqa: BLE001
-                self.app.call_from_thread(static.update, f"❌ 授权失败: {e}")
+                _post(self.app, static.update, f"❌ 授权失败: {e}")
             finally:
                 def enable() -> None:
                     self.query_one("#auth-btn", Button).disabled = False
-                self.app.call_from_thread(enable)
+                _post(self.app, enable)
         self.run_worker(flow, thread=True)
 
 
