@@ -1,6 +1,10 @@
 # tg115bot
 
-接收 TG 视频/文件，自动下载并上传到 115 网盘；支持 115 离线、RSS、频道监控、AI 助手；跨 Linux/macOS/Windows 一键安装；统一命令行工具 tb 并附带 TUI，管理操作便捷。
+![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Docker-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+**tg115bot** 把 Telegram 变成 115 网盘的自动入口：视频、文件、磁力链接发给 bot，剩下的交给它——自动下载、转存、整理归档，全程无人值守。传输走 MTProto 并行分片 + 115 服务端秒传 + OSS 分片直传，大文件也能跑满带宽；频道监控、RSS 订阅、离线下载、整频道回溯备份，让内容自动"流"进网盘；再配一个能用中文对话的 AI 助手，管理网盘不用记命令。跨 Linux / macOS / Windows 一键安装，`tb` 命令行、交互 TUI、Web 管理台三套入口随取随用。
 
 <img src="docs/screenshots/dashboard.png" width="780">
 <p align="center"><em>仪表盘：四卡状态 + 最近任务</em></p>
@@ -17,45 +21,20 @@
 <img src="docs/screenshots/log.png" width="780">
 <p align="center"><em>日志：实时跟踪 stdout / 业务日志</em></p>
 
+**目录**：[特性](#特性) · [快速开始](#快速开始) · [tb 命令行](#tb-命令行) · [TG 机器人](#tg-机器人) · [配置项](#配置项) · [项目结构](#项目结构) · [注意事项](#注意事项) · [安全须知](#安全须知)
+
 ## 特性
 
-### 一键即用
-
-- **一行安装**：`curl ... | bash`（Linux/macOS）/ `irm ... | iex`（Windows），装完即有 `tb` 命令
-- **`tb init` 全程引导**：7 步（依赖→虚拟环境→代理→配置→115 扫码→可选功能→完成），幂等可重跑
-- **`tb doctor` 一键体检**：环境/授权/磁盘/代理安全/服务状态全套检查
-- **服务管理全家桶**：`tb start / stop / restart / status / log`；PID 校验防误杀；后台运行 SSH 断开不影响
-- **跨平台**：Linux / macOS / Windows（PowerShell）/ Docker 统一体验
-
-### 高速传输
-
-- **MTProto 并行分片下载**：bot 单文件 2GB / user session（Premium）4GB；绕过 Bot API 20MB 限制
-- **秒传优先**：服务端 SHA1 去重，命中即落库（跳过整个上传阶段）
-- **OSS 分片直传**：秒传未命中时走阿里云 OSS，含二次区间校验
-- **115 开放平台协议手写**：零三方 SDK 依赖，token 自动刷新
-- **多账号加权轮转 + 故障冷却**：分摊风控压力
-
-### 自动化
-
-- **频道监控**：关键词白/黑名单 + 目标目录规则，命中自动上传（图片/相册同样支持）
-- **115 离线下载**：磁力/ed2k/直链在 115 服务器下载，不占本地带宽；失败自动重试
-- **RSS 订阅**：新条目自动提取链接离线，关键词过滤 + 去重
-- **频道回溯备份**：断点续传（`kill -9` 不丢进度），队列背压防灌爆
-- **分享链接转存**：自动识别 115 分享链接转存到指定目录（需浏览器 Cookie）
-- **HTTP 直链中转**：本地下载后上传，与 115 离线互补
-- **文件整理**：重命名模板（`{date}_{filename}` 等）+ 按扩展名归类子目录
-
-### 可观测
-
-- **TUI 仪表盘**（见下节）：四卡状态 + 任务表 + 模态弹窗确认 + 实时刷新
-- **Web 管理台**：实时进度 / 任务历史 / 账号状态 / 频道规则 / 日志（HTTP Basic 认证）
-- **SQLite 持久化**：任务/规则/账号/日志全部落盘，重启不丢
-- **健康检查 + 日志管理**：`tb doctor` 自检；`tg115bot.log` + `stdout.log` 双重 10M×7 天滚动保留
-
-### 可选增强
-
-- **AI 助手**：任意 OpenAI 兼容模型（DeepSeek/Qwen/GPT…），自然语言对话操作全部功能；可按需创建受限沙箱工具（**经 TG 确认后启用**）
-- **可观测性细节**：服务状态用 `⏩/🛑` 图标（非纯色圆点）；四卡边框分色区分身份；危险操作统一模态确认防误触
+- **高速传输** — MTProto 并行分片下载（bot 单文件 2GB / user session 4GB，绕开 Bot API 20MB 限制）+ 115 服务端秒传 + OSS 分片直传
+- **自动搬运** — 频道监控（关键词规则）、RSS 订阅、磁力 / ed2k / 直链 115 离线、整频道回溯备份（断点续传）、115 分享链接自动转存、HTTP 直链本地中转
+- **AI 助手** — 任意 OpenAI 兼容模型，一句中文操作全部功能；可按需生成受限沙箱工具（TG 确认后启用）
+- **文件整理** — 重命名模板（`{date}_{filename}` 等）+ 按扩展名自动归类子目录
+- **一键安装** — Linux / macOS `curl | bash`、Windows `irm | iex`；`tb init` 引导配置与 115 扫码，`tb doctor` 一键体检
+- **三套管理入口** — `tb` 命令行（与 `scripts/manual.py` 同构）、交互 TUI、Web 管理台（实时进度 / 任务 / 账号 / 规则 / 日志）
+- **多账号** — 加权轮转 + 故障冷却，分摊 115 风控压力
+- **零三方 SDK** — 115 开放平台协议与 OSS 签名直传均为手写实现，token 自动刷新
+- **数据可靠** — SQLite 持久化（任务 / 规则 / 账号 / 日志重启不丢），双日志 10M 滚动 × 7 天保留
+- **部署多样** — 后台服务（SSH 断开不影响）、Docker Compose、Windows 开机自启
 
 ## 快速开始
 
@@ -76,101 +55,43 @@ irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 
 装完即有 `tb` 命令：
 
 ```bash
-tb init      # 首次配置（依赖/代理/扫码授权，交互式，幂等可重跑）
-tb doctor    # 一键体检
-tb start     # 启动服务
-tb           # 进交互 TUI（裸 `tb`）；tb --help 看全部命令
-```
-
-`tb init` 交互式完成 7 步（**幂等重跑安全，已就绪自动跳过**）：
-
-| 步骤 | 内容 | 智能行为 |
-|---|---|---|
-| 1 | 系统依赖（Python ≥ 3.12） | 已装跳过，缺失自动 apt 安装 |
-| 2 | 虚拟环境 + 依赖 | `.venv` + pip，装过自动跳过 |
-| 3 | 代理（mihomo） | 能直连 TG 则跳过；已装直接采用；都不行引导订阅 |
-| 4 | `config.yaml` | 交互收集 api_id / hash / bot_token（附获取指引） |
-| 5 | 115 扫码授权 | 可当场扫或稍后 `tb auth` / TG `/auth` |
-| 6 | 可选功能 | AI 模式 / Web 台（回车跳过；Web 强提示改密码） |
-| 7 | 完成提示 | 打印启动命令 |
-
-启动服务：
-
-```bash
-tb start          # 源码克隆安装时等价：./scripts/service.sh start
-```
-
-### tb 命令一览
-
-| 分类 | 命令 |
-|---|---|
-| 服务 | `tb start / stop / restart / status / log [N]` |
-| 运维 | `tb init / doctor / mihomo <订阅> / session / update / version` |
-| 115 操作 | `tb ls / info / search / upload / download / offline add·list·del / rm / mv / mkdir / rename / df / share save / auth` |
-| 交互 | 裸 `tb` 进 TUI（仪表盘/文件/离线任务/配置/日志）；`tb menu` 进 Rich 菜单（`TB_TUI=0` 设为默认） |
-| 全局 | `-a, --account <名>` 选 115 账号；`tb --install-completion` 装 shell 补全 |
-
-CLI 与 `scripts/manual.py` 子命令同构（tb 是其统一入口），参数完全一致；TUI 与 CLI 共用同一数据层，行为一致。
-
-### 服务管理
-
-```bash
-tb start       # 后台启动（关终端 / SSH 断开不影响）
-tb stop        # 优雅停止（10s 后强杀进程树）
-tb restart     # 重启（更新代码 / 改配置后用这个）
-tb status      # 状态：PID / 内存 / 运行时长
-tb log [N]     # 跟踪日志（默认尾部 50 行，Ctrl+C 退出）
-```
-
-- PID 文件防重复启动（校验进程命令行，防 PID 复用误杀）
-- 双日志：`logs/stdout.log`（运行输出）+ `logs/tg115bot.log`（业务日志，**统一 10M 滚动 + 7 天保留**）
-- 更新：`tb update`（git pull + 依赖刷新）后 `tb restart`
-
-### 代理订阅更新
-
-订阅过期 / 换机场时（mihomo 节点全挂、TG 失联）：
-
-```bash
-sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实测连通性
-./scripts/service.sh restart                 # bot 重连
+tb init      # 交互式初始化：依赖 → 虚拟环境 → 代理 → 配置 → 115 扫码 → 可选功能 → 完成
+             # 幂等可重跑，已就绪的步骤自动跳过
+tb doctor    # 一键体检：环境 / 授权 / 磁盘 / 代理安全 / 服务状态
+tb start     # 后台启动服务（SSH 断开不影响）
+tb           # 进入交互 TUI；tb --help 看全部命令
 ```
 
 ### Windows 部署
 
-Windows 版不做代理部署——自行安装 Clash / v2rayN 等系统代理软件，初始化时把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy` 即可。
+Windows 版不部署代理——自行安装 Clash / v2rayN 等系统代理软件，初始化时把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy`。
 
 ```powershell
 irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 | iex
-tb init        # 初始化（6 步，含可选开始菜单快捷方式）
-tb start       # 启动
+tb init      # 初始化（含可选开始菜单快捷方式）
+tb start     # 启动
 ```
 
-或源码方式：`git clone` 后 `powershell -ExecutionPolicy Bypass -File scripts\init.ps1` / `.\scripts\service.ps1 start`。
+服务管理与 Linux 同构（`start / stop / restart / status / log`）：后台隐藏窗口运行，PID 校验防误杀，日志同样双份滚动。开机自启（可选）：
 
-服务管理与 Linux 版同构（`start / stop / restart / status / log [N]`）：
+```powershell
+schtasks /Create /SC ONSTART /TN tg115bot /TR "powershell -ExecutionPolicy Bypass -File <项目路径>\scripts\service.ps1 start"
+```
 
-- 后台隐藏窗口运行，PID 记录在 `run\tg115bot.pid`（校验进程命令行防 PID 复用误杀）
-- 配置写入走内嵌 Python 的 yaml 往返（`api_key` 等同名键不会误伤）
-- 日志同样在 `logs\stdout.log`（运行输出）+ `logs\tg115bot.log`（业务，轮转）
-- 开机自启（可选）：
-  ```powershell
-  schtasks /Create /SC ONSTART /TN tg115bot /TR "powershell -ExecutionPolicy Bypass -File <项目路径>\scripts\service.ps1 start"
-  ```
+或源码方式：`git clone` 后 `powershell -ExecutionPolicy Bypass -File scripts\init.ps1`。
 
 ### Docker 部署
 
 ```bash
-# 1. 若需要代理（国内服务器访问 TG），先在宿主机部署 mihomo
+# 1. 若需代理（国内服务器访问 TG），先在宿主机部署 mihomo
 sudo ./scripts/setup-mihomo.sh <订阅地址>
 
 # 2. 配置
 cp config.yaml.example config.yaml    # 基础配置；telegram 段可留空，交给 .env 覆盖
 cp .env.example .env                  # 填 telegram 段；代理填 http://host.docker.internal:7890
 
-# 3. 启动
+# 3. 启动 / 看日志
 docker compose up -d --build
-
-# 4. 查看日志
 docker compose logs -f
 ```
 
@@ -200,93 +121,56 @@ python main.py
 
 </details>
 
-## TUI 使用
+## tb 命令行
 
-裸 `tb` 启动即可进入交互式 TUI（Textual）。全中文界面，按钮 + 键盘双轨，危险操作统一弹窗确认。
+`tb` 是统一命令行入口，与 `scripts/manual.py` 子命令同构、参数完全一致（在安装目录直接跑 `python scripts/manual.py` 亦可）。无参数运行进交互菜单；未授权先 `tb auth`。
 
-### 启动
+### 服务管理
+
+| 命令 | 说明 |
+|---|---|
+| `tb start / stop / restart` | 后台启动 / 优雅停止（10s 后强杀进程树）/ 重启 |
+| `tb status` | 状态：PID / 内存 / 运行时长 |
+| `tb log [N]` | 跟踪日志（默认尾部 50 行，Ctrl+C 退出） |
+| `tb update` | 更新代码 + 刷新依赖，之后 `tb restart` 生效 |
+
+PID 文件防重复启动（校验进程命令行，防 PID 复用误杀）；双日志 `logs/stdout.log` + `logs/tg115bot.log` 统一 10M 滚动、7 天保留。
+
+### 115 操作（不依赖 Telegram）
 
 ```bash
-tb                     # 默认进 TUI
-TB_TUI=0 tb menu       # 强制进 Rich 交互菜单
-tb --help              # 看全部命令
+tb ls /tg115bot                                   # 列目录（--all 翻页取全部）
+tb search 关键词                                   # 全盘搜索
+tb upload /data/photos -d /tg115bot/photos        # 目录递归；也支持通配符 '/data/p*.jpg'
+tb download /tg115bot/a.mkv -o ~/Downloads        # 下载到本地（sha1 校验；v1 仅单文件）
+tb offline add "magnet:?xt=…" -d /tg115bot/bt     # 添加离线
+tb offline list -a                                # 离线任务（-a 全部页）
+tb offline del <info_hash> --purge                # 删任务（--purge 连源文件）
+tb mkdir /tg115bot/newdir                         # 还有 mv / rename / rm（rm 默认需确认）
+tb df                                             # 空间 / 离线配额 / 风控水位
+tb share save "https://115.com/s/xxx?password=码"  # 分享转存（需 share.cookies）
+tb auth                                           # 扫码（重新）授权 / 强刷 token
+tb -a b2 df                                       # 多账号时指定账号
 ```
 
-### 键盘总表
+退出码：`0` 成功 / `1` 失败 / `2` 需重新扫码授权（cron 可判断）。
 
-| 页面 | 快捷键（与按钮同路） |
-|---|---|
-| 仪表盘 | `s` 启动 · `t` 停止 · `r` 重启 · `d` 诊断 · `x` 删除任务记录 |
-| 文件 | `d` 删除 · `s` 下载 · `n` 重命名 · `m` 移动 · `+` 新建 · `u` 聚焦上传 · `r` 刷新 |
-| 离线任务 | `d` 删除任务 · `a` 聚焦添加 · `r` 刷新 |
-| 配置 | `s` 保存并校验 · `l` 重新加载 · `r` 重启服务 |
-| 全局 | `q` 退出 · `Esc` 关弹窗 · `Ctrl+P` 命令面板 |
+### 运维
 
-> **重要**：配置页的快捷键 `s / l / r` 仅在**焦点离开编辑框**时生效。点进 `TextArea` 编辑后字母键自动让位，不会误触发保存 / 重启。
+`tb init`（初始化）/ `tb doctor`（体检）/ `tb mihomo <订阅>`（代理）/ `tb session`（user session）/ `tb version`；`tb --install-completion` 装 shell 补全。裸 `tb` 进 TUI，`tb menu` 进 Rich 菜单。
 
-### 页面详解（截图速览在顶部）
+代理订阅过期 / 换机场时（mihomo 节点全挂、TG 失联）：
 
-#### 📊 仪表盘
-
-四张状态卡 + 最近任务表（5 秒刷新）：
-
-| 卡片 | 边框色 | 含义 |
-|---|---|---|
-| 服务 | 🟢 绿 / 🔴 红 | 状态驱动（运行 / 停止），运行中用 `⏩` 图标（停止用 `🛑`），比纯色圆点更有辨识度 |
-| 磁盘 | 🟡 黄 → 🔴 红 | 常态黄，**已用 ≥90%** 同步变红；卡内同步显示已用 / 总量 + 进度条 |
-| 115 空间 | 🔵 青 | 已用 / 配额 + 用量条（与磁盘卡同构） |
-| API 余量 | 🟣 品红 | 今日已用 / 阈值，配额进度 |
-
-任务表操作：**`x`** 或点「删记录 (x)」——仅**终态**任务（完成 / 失败 / 已取消）允许删除，弹窗确认；进行中任务只 toast 拒绝。删除只清记录不影响 115 云端文件。
-
-#### 📁 文件浏览
-
-115 网盘远程管理。**七个彩色按钮** + 上传输入框，参数走 `PromptModal` 弹窗输入（`Enter` 提交，预填全选直接打字覆盖；校验失败弹窗内红字提示不关闭）：
-
-- **删除 (d)**（红）：模态确认
-- **下载 (s)**（青）：输入本地目录
-- **重命名 (n)**（琥珀）：预填旧名，校验非空且不含 `/`
-- **移动 (m)**（紫）：输入目标 115 路径（不存在自动创建）
-- **新建 (+)**（绿）：输入目录名
-- **刷新 (r)**（灰）：直接刷新
-
-上传是高频操作——上传**输入框 + 上传按钮**并列：
-
-```
-[上传：输入本地文件/目录/通配符路径后回车……]    [上传 (u)]
+```bash
+sudo scripts/setup-mihomo.sh <新订阅地址>    # 自动备份旧配置并实测连通性
+tb restart                                 # bot 重连
 ```
 
-- 输入路径后 `Enter` 或点按钮上传；**空内容按钮禁用**（实时联动）
-- `u` 快捷键 = 一键聚焦上传输入框；提交后焦点留在输入框，连续上传不用重新定位
+## TG 机器人
 
-#### ⏬ 离线任务
+向 bot 发送视频 / 文件即可，自动上传到 `upload.target_dir` 指定的 115 目录。
 
-磁力 / ed2k / 直链在 115 服务器下载，不占本地带宽。
-
-- **删除任务 (d)**（红，弹窗确认）：**连已下载的源文件**一起删，不可恢复
-- **刷新 (r)**（灰）
-- **添加 (a)**（蓝）：输入 magnet/ed2k/直链后回车或点按钮提交
-
-#### 🔧 配置
-
-双 Tab：**参数** / **115 授权**。
-
-- 参数 Tab：开关（Web 台 / 本地副本 / 频道监控）+ YAML 文本编辑器（带行号）+ 三个动作按钮
-- 115 授权 Tab：二维码扫码授权 / 强刷 token
-
-「重启服务」按钮模态确认期间短暂不可用；保存 YAML 会自动备份 `config.yaml.bak.<时间戳>`。
-
-### 截图技巧
-
-- **标题栏右上 `❌`**：点击直接退出应用（也可用 `q`）
-- **`Ctrl+P` 命令面板**：搜索并执行 Textual 系统命令（如 Save Screenshot，会自动写入 `~/Downloads/tg115bot_<时间>.svg`）
-- **`Esc`**：关闭任何模态弹窗（危险操作 / 输入框 / 信息展示）
-
-## 使用
-
-向 bot 发送视频/文件即可，文件会自动上传到 `upload.target_dir` 指定的 115 目录。
-
-### TG 机器人命令
+### 机器人命令
 
 | 命令 | 说明 |
 |---|---|
@@ -294,70 +178,52 @@ tb --help              # 看全部命令
 | `/setdir <115路径>` | 设置目标目录（如 `/tg115bot/movies`） |
 | `/auth` | 授权 / 检查 115 账号状态 |
 | `/cancel` | 取消最近一个进行中的任务 |
-| `/channels` | 查看频道监控规则 |
-| `/addchannel <频道ID> <目标目录> [关键词...]` | 新增频道规则（关键词为白名单，留空=全部） |
-| `/delchannel <规则ID>` | 删除频道规则 |
-| `/offline <链接>` | 115 离线下载（磁力 / ed2k / 直链；**直接发链接也可**） |
-| `/offlines` | 查看离线任务队列 |
-| `/addrss <RSS地址> [目录] [关键词...]` | 订阅 RSS 自动离线（关键词=标题白名单，空=全部） |
-| `/rsss` `/delrss <ID>` | 查看 / 退订 RSS |
 | `/status` | 115 空间 / 离线配额 / 风控余量 / 账号 / 队列一览 |
 | `/ls <路径>` | 列 115 目录 |
 | `/search <关键词>` | 115 全盘搜索 |
 | `/rm <路径>` | 删除（二次确认） |
 | `/mv <源> <目的目录>` | 移动 |
+| `/offline <链接>` | 115 离线下载（磁力 / ed2k / 直链；**直接发链接也可**） |
+| `/offlines` | 查看离线任务队列 |
+| `/dl <http直链>` | 本地中转下载后上传 |
+| `/channels` | 查看频道监控规则 |
+| `/addchannel <频道ID> <目标目录> [关键词...]` | 新增频道规则（关键词为白名单，留空=全部） |
+| `/delchannel <规则ID>` | 删除频道规则 |
+| `/addrss <RSS地址> [目录] [关键词...]` | 订阅 RSS 自动离线（关键词=标题白名单，空=全部） |
+| `/rsss` `/delrss <ID>` | 查看 / 退订 RSS |
 | `/backup <频道ID或@名> [目录]` | 整频道历史备份（断点续传） |
 | `/backups` `/backupstop <ID>` | 备份进度 / 暂停 |
-| `/dl <http直链>` | 本地中转下载后上传 |
 | `/ai` `/aireset` `/aitools` | AI 模式开关 / 清空记忆 / 管理动态工具 |
 
-### 命令行手动运维（`tb <子命令>`，等价 scripts/manual.py）
+### 离线下载与转存
 
-不依赖 Telegram，直接在服务器 / 本机操作 115。**推荐用 `tb`**（如 `tb ls /tg115bot`、`tb upload /data/photos -d /tg115bot/photos`）；以下 `python scripts/manual.py` 形式完全等价，适合在安装目录直接跑：**无参数运行进交互菜单**，带子命令则一次性执行（可 cron / 脚本编排）。未授权先跑 `tb auth`。
+磁力 / ed2k / 种子及媒体直链直接发给 bot 即自动离线下载（或 `/offline <链接>`）：资源在 **115 服务器**下载，不占本地带宽、不经代理；完成自动通知，失败自动重试 2 次；`/offlines` 查看队列。
 
-```bash
-python scripts/manual.py                          # 交互菜单（编号选择，循环操作）
-python scripts/manual.py ls /tg115bot             # 列目录（--all 翻页取全部）
-python scripts/manual.py search 关键词             # 全盘搜索
-python scripts/manual.py upload /data/photos -d /tg115bot/photos   # 目录递归，保持内部结构
-python scripts/manual.py upload '/data/p*.jpg' -d /tg115bot/photos  # 通配符/多路径（引号防 shell 展开多个）
-python scripts/manual.py download /tg115bot/a.mkv -o ~/Downloads   # 下载到本地（sha1 校验）
-python scripts/manual.py offline add "magnet:?xt=…" -d /tg115bot/bt
-python scripts/manual.py offline list -a          # 离线任务（-a 全部页）
-python scripts/manual.py offline del <info_hash> --purge            # 删任务（--purge 连文件）
-python scripts/manual.py mkdir /tg115bot/newdir   # 还有 mv / rename / rm（rm 默认需确认）
-python scripts/manual.py df                       # 空间 / 离线配额 / 风控水位
-python scripts/manual.py share save "https://115.com/s/xxx?password=码"   # 需 share.cookies
-python scripts/manual.py auth                     # 扫码（重新）授权，强刷 token
-python scripts/manual.py --account b2 df          # 多账号时指定账号
+115 分享链接（`https://115.com/s/xxx?password=访问码`）自动转存到 `share.target_dir`（需配置 `share.cookies`，浏览器登录后复制）；`/dl <直链>` 走本地中转下载再上传（经 `telegram.proxy`），适合 115 离线不支持或速度慢的源。
+
+### 频道监控
+
+1. 将 bot 加入目标频道（频道 ID 可在 TG 内转发消息给 `@userinfobot` 获取）；
+2. `channel_monitor.enabled: true`；
+3. 用 `/addchannel` 或 Web 台添加规则（关键词白 / 黑名单 + 目标目录）。
+
+### RSS 订阅
+
+```text
+/addrss https://example.com/feed.xml /tg115bot/pt 1080p HEVC
 ```
 
-退出码：`0` 成功 / `1` 失败 / `2` 需重新扫码授权（cron 可判断）。下载为单文件（v1 不支持目录递归下载）。
+每 10 分钟检查全部订阅源；条目标题命中关键词（留空=全部）且含可下载链接时自动离线，重复条目自动去重。RSS 源经 `telegram.proxy` 抓取。
 
-### Web 管理台（可选）
+### 频道回溯备份
 
-`web.enable: true` 后，浏览器打开 `http://<host>:<port>/`（HTTP Basic 认证，凭据见 `config.web`）：
+```text
+/backup -1001234567890 /tg115bot/archive
+```
 
-- 仪表盘 — 实时进度（3s 自动刷新）
-- `/tasks` — 任务历史　`/accounts` — 账号状态　`/channels` — 频道规则在线增删　`/logs` — 日志
+从最新消息向历史回溯，媒体全部入队上传（若该频道配了监控规则则按关键词过滤）。**断点续传**：中断后重发命令自动从上次位置继续（`kill -9` 也不丢进度）；`/backups` 查看进度，`/backupstop` 暂停。
 
-### 频道监控（可选）
-
-1. 将 bot 加入目标频道；
-2. `channel_monitor.enabled: true`；
-3. 用 `/addchannel` 或 Web 台添加规则。频道 ID 可在 TG 内转发消息给 `@userinfobot` 获取。
-
-### 离线下载
-
-发送磁力 / ed2k / 种子及媒体直链给 bot 即自动离线下载（或 `/offline <链接>`），
-资源在 **115 服务器**下载，不占本地带宽、不经代理。完成自动通知；失败自动重试 2 次。
-`/offlines` 查看队列状态。
-
-发 115 分享链接（`https://115.com/s/xxx?password=访问码`）自动转存到 `share.target_dir`
-（需在 `config.yaml` 配置 `share.cookies`，浏览器登录后复制；该接口仅 Cookie 鉴权）。
-`/dl <直链>` 走本地下载再上传（经 `telegram.proxy`），适合 115 离线不支持或慢的直链源。
-
-### AI 助手模式（可选）
+### AI 助手（可选）
 
 ```yaml
 ai:
@@ -372,28 +238,11 @@ ai:
 - "网盘还有多少空间？离线配额呢？" → 调 `full_status` 汇报
 - "订阅这个 RSS，只要 1080p 以上" → `rss_add` + 关键词
 
-AI 可调用全部内置工具（18 个）；需要新能力时它会写一个受限沙箱内的
-Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）。
-会话记忆持久化，重启不丢；`/ai off` 临时停用。
+AI 可调用全部内置工具（18 个）；需要新能力时它会写一个受限沙箱内的 Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）。会话记忆持久化，重启不丢；`/ai off` 临时停用。
 
-### 频道回溯备份
+### Web 管理台（可选）
 
-```text
-/backup -1001234567890 /tg115bot/archive
-```
-
-从最新消息向历史回溯，媒体全部入队上传（若该频道配了监控规则则按关键词过滤）。
-**断点续传**：中断后重发命令自动从上次位置继续（`kill -9` 也不丢进度）；
-每入队约 20 项发一次进度通知；`/backups` 查看进度，`/backupstop` 暂停。
-
-### RSS 订阅（可选）
-
-```text
-/addrss https://example.com/feed.xml /tg115bot/pt 1080p HEVC
-```
-
-每 10 分钟检查一次全部订阅源；条目标题命中关键词（留空=全部）且含可下载链接
-（magnet / ed2k / 种子及媒体直链）时自动离线，重复条目自动去重。RSS 源经 `telegram.proxy` 抓取。
+`web.enable: true` 后浏览器打开 `http://<host>:<port>/`（HTTP Basic 认证，凭据见 `config.web`）：仪表盘实时进度（3s 刷新）、`/tasks` 任务历史、`/accounts` 账号状态、`/channels` 规则在线增删、`/logs` 日志。
 
 ## 配置项
 
@@ -455,14 +304,17 @@ tg115bot/
 - token 过期自动刷新；彻底失效时 `/auth` 重新扫码即可。
 - 大文件全程流式处理（预分配 + 分片 seek 写盘），不占额外内存。
 - `downloads/` 为临时目录，上传成功后自动清理（`storage.keep_local: true` 时成功保留副本、失败保留现场）。
-- TUI 图标只用 **East**（EAW=W）的单码位字符——部分终端会把 BMP+VS16 字符（如 ⚙️ / ⬇️）按 1 格渲染，会导致菜单/表格列错位一格。
 
 ## 安全须知
 
-- **mihomo 代理加固**：`setup-mihomo.sh` 在订阅落地后强制覆写——代理端口源 IP 白名单（仅本机 / 内网 / Docker 网段）、控制 API 只监听 `127.0.0.1:9090`。公网来源连接代理端口会被直接拒绝。Docker 部署经 `host.docker.internal` 的连接源 IP 在 `172.16/12` 段内，不受影响。
-- **云服务器安全组是最后防线**：只放行确实需要的端口（SSH、Web 台）；**绝不要放行 7890 / 9090**（代理端口 / 控制 API）。Web 台（8080）如需公网访问，务必限制源 IP 并修改默认密码——它是明文 HTTP Basic 认证。
-- **为什么重要**：公网上的开放代理会被全网扫描器在数小时内盯上，被用来刷流量、中转垃圾邮件，足够把小服务器的 CPU / 内存 / 磁盘全部耗尽。`init.sh` 检测到 mihomo 监听公网且无白名单时会明确告警。
+- **mihomo 代理加固**：`setup-mihomo.sh` 在订阅落地后强制覆写——代理端口源 IP 白名单（仅本机 / 内网 / Docker 网段）、控制 API 只监听 `127.0.0.1:9090`，公网来源直接拒绝。
+- **云服务器安全组是最后防线**：只放行确实需要的端口（SSH、Web 台）；**绝不要放行 7890 / 9090**（代理端口 / 控制 API）。Web 台如需公网访问，务必限制源 IP 并修改默认密码（明文 HTTP Basic 认证）。
+- **为什么重要**：公网上的开放代理会被全网扫描器在数小时内盯上，被用来刷流量、中转垃圾邮件，足以耗尽小服务器的 CPU / 内存 / 磁盘。`init.sh` 检测到 mihomo 监听公网且无白名单时会明确告警。
 
 ## 免责声明
 
 仅供个人学习与合法的网盘文件管理使用。请遵守当地法律法规及 115 / Telegram 服务条款，使用风险自负。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 ivenlau
