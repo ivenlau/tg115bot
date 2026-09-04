@@ -19,7 +19,6 @@ class Workspace:
         self.root = Path(work_dir)
         self.min_free_bytes = min_free_gb * 1024 ** 3
         self.keep_local = keep_local
-        self.delete_after_upload = True     # 由 pipeline 依据 upload 配置回填
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path_for(self, name: str) -> Path:
@@ -50,6 +49,20 @@ class Workspace:
         except OSError as e:
             log.warning("保留副本失败 %s: %r", tmp, e)
             return None
+
+    def finalize(self, tmp: Path, final_name: str, succeeded: bool) -> None:
+        """任务收尾本地临时文件（替代已移除的 upload.delete_after_upload）。
+
+        keep_local=true：成功→转存原名副本（转存失败才清理，云端已有不丢数据）；
+                          失败→原样保留 .part 现场供排查/续用。
+        keep_local=false：一律清理。
+        """
+        if self.keep_local:
+            if succeeded:
+                if self.keep_copy(tmp, final_name) is None:
+                    self.cleanup(tmp)
+            return
+        self.cleanup(tmp)
 
     @staticmethod
     def preallocate(path: Path, size: int) -> None:

@@ -35,7 +35,6 @@ class UploadCfg(BaseModel):
     chunk_size: int = 1024 * 1024
     oss_concurrency: int = 8
     target_dir: str = "/tg115bot"
-    delete_after_upload: bool = True
 
 
 class AccountCfg(BaseModel):
@@ -48,8 +47,8 @@ class AccountCfg(BaseModel):
 class StorageCfg(BaseModel):
     work_dir: str = "downloads"
     min_free_gb: int = 5
-    # 保留本地副本：true 时上传成功后不删临时文件，改存为 downloads/copies/<原文件名>
-    # 注意：临时名含 uuid 后缀，副本会去掉后缀还原为原文件名
+    # 保留本地文件：true 时上传成功后存原名副本到 <work_dir>/copies/（临时名含
+    # uuid 后缀，副本会去掉后缀还原原名）；任务失败时保留 .part 现场供排查/续用
     keep_local: bool = False
 
 
@@ -88,6 +87,7 @@ class LoggingCfg(BaseModel):
     max_bytes: int = 10 * 1024 * 1024
     backup_count: int = 5
     db_buffer: int = 200                # 内存缓冲条数；>0 启用 DB 日志落盘
+    retention_days: int = 7             # logs/ 下所有日志（含拆分件）最多保留天数
 
 
 class ShareCfg(BaseModel):

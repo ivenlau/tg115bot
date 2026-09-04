@@ -22,6 +22,8 @@ MODULES = [
     "tests.test_oss_protocol",
     "tests.test_manual_tools",
     "tests.test_tb",
+    "tests.test_workspace_finalize",
+    "tests.test_log_rotation",
     "tests.test_tui",
 ]
 

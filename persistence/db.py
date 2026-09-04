@@ -221,6 +221,11 @@ class Database:
             rows = await cur.fetchall()
         return [_task_row(r) for r in rows]
 
+    async def delete_task(self, task_id: str) -> None:
+        """删除单条任务记录（终态记录清理；TUI 仪表盘用，WAL 多进程写安全）。"""
+        await self.conn.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+        await self.conn.commit()
+
     async def task_stats(self) -> dict:
         out = {"total": 0, "done": 0, "failed": 0, "cancelled": 0, "running": 0,
                "秒传": 0, "oss": 0, "fs.upload": 0}

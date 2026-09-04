@@ -275,6 +275,56 @@ def _case_offline_page_ops_stub() -> None:
     asyncio.run(go())
 
 
+def _case_dashboard_task_delete_stub() -> None:
+    """任务记录删除：终态任务弹确认删 DB；进行中任务只提示不弹窗。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from tb.tui import ConfirmModal, TBApp
+
+    deleted = []
+
+    class FakeDB:
+        async def recent_tasks(self, n):
+            return [
+                SimpleNamespace(task_id="t1", status="done", filename="a.mkv",
+                                size=1024, method="tg", source="", progress=100,
+                                created_at=1789000000),
+                SimpleNamespace(task_id="t2", status="downloading", filename="b.mkv",
+                                size=2048, method="", source="tg", progress=40,
+                                created_at=1789000100),
+            ]
+
+        async def delete_task(self, task_id):
+            deleted.append(task_id)
+
+    async def stub_init(self):
+        self.ctx, self.db = None, FakeDB()
+    TBApp._init_all = stub_init
+
+    async def go():
+        from textual.widgets import Button
+        app = TBApp()
+        async with app.run_test(size=(110, 34)) as pilot:
+            await pilot.pause(0.8)      # 等 refresh_dash 首轮填充 _task_meta
+            page = app.query_one("#content DashboardPage")
+            t = page.query_one("#tasks")
+            t.focus()
+            t.move_cursor(row=0)        # done 行
+            await pilot.press("x")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ConfirmModal), "终态任务应弹删除确认"
+            app.screen.query_one("#dlg-ok", Button).press()
+            await pilot.pause(0.5)
+            assert deleted == ["t1"], deleted
+            t.move_cursor(row=1)        # downloading 行
+            await pilot.press("x")
+            await pilot.pause(0.3)
+            assert not isinstance(app.screen, ConfirmModal), "进行中任务不应弹窗"
+            assert deleted == ["t1"], "进行中任务不应被删"
+    asyncio.run(go())
+
+
 def _case_config_page_headless() -> None:
     """配置页：双 Tab、开关/编辑器就位、坏文本保存被拦且不落盘。"""
     import asyncio

@@ -88,7 +88,6 @@ async def run_direct_task(task: Task, tmp: Path) -> None:
 
     cfg = state.config
     ws = state.workspace
-    ws.delete_after_upload = cfg.upload.delete_after_upload
     reporter = ProgressReporter(
         state.pyro_bot, task.tracking_chat_id, task.tracking_message_id,
         task_id=task.task_id, filename=task.filename, source="direct",
@@ -119,8 +118,4 @@ async def run_direct_task(task: Task, tmp: Path) -> None:
         log.exception("直链任务失败: %s", task.filename)
         await reporter.final_text(f"❌ 失败: {task.filename}\n原因: {e}")
     finally:
-        if succeeded and ws.keep_local:
-            if ws.keep_copy(tmp, task.filename) is not None:
-                return
-        if ws.delete_after_upload:
-            ws.cleanup(tmp)
+        ws.finalize(tmp, task.filename, succeeded)

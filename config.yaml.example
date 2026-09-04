@@ -19,7 +19,6 @@ upload:
   chunk_size: 1048576             # 下载分片大小（字节），默认 1MB
   oss_concurrency: 8              # OSS 分片并发数
   target_dir: "/tg115bot"         # 115 默认目标目录（不存在自动创建）
-  delete_after_upload: true       # 上传成功后删除本地临时文件
 
 queue:
   concurrency: 2                  # 同时处理的任务数；多任务并发注意带宽/磁盘
@@ -35,7 +34,7 @@ accounts:
 storage:
   work_dir: "downloads"           # 临时下载目录
   min_free_gb: 5                  # 可用空间下限（GB），低于则暂停接新任务
-  keep_local: false               # true 时上传成功后保留本地副本到 <work_dir>/copies/（不删临时文件）
+  keep_local: false               # true 时成功留原名副本到 <work_dir>/copies/，失败保留 .part 现场
 
 # 115 风控退避
 115_rate:
@@ -66,9 +65,10 @@ channel_monitor:
 logging:
   level: "INFO"                    # DEBUG/INFO/WARNING/ERROR
   file: "logs/tg115bot.log"
-  max_bytes: 10485760              # 10MB 轮转
+  max_bytes: 10485760              # 10MB 轮转（tg115bot.log 与 stdout.log 同规则）
   backup_count: 5
   db_buffer: 200                   # >0 时把日志缓冲落盘到 SQLite（Web 台可查）
+  retention_days: 7                # logs/ 下所有日志（含拆分件）最多保留天数
 
 security:
   secret_key: ""                   # 留空则读环境变量 TG115BOT_SECRET_KEY；仍空用开发态默认（仅本机）

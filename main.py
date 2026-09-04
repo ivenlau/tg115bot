@@ -9,7 +9,8 @@ import logging
 import sys
 
 from config import load_config
-from utils.logging import setup_logging, log_drainer
+from utils.logging import (install_rotating_stdout, log_drainer,
+                           log_retention_loop, setup_logging)
 from cloud115.account import AccountManager
 from core.workspace import Workspace
 from core.queue import TaskQueue
@@ -60,6 +61,7 @@ async def _start_web(cfg) -> tuple | None:
 async def main() -> None:
     _force_utf8_stdio()
     cfg = load_config()
+    install_rotating_stdout(cfg)   # 越早越好：此后所有 print/traceback 限长滚动
     db_log_handler = setup_logging(cfg)
     state.config = cfg
     log.info("配置加载完成；work_dir=%s", cfg.work_dir_abs)
@@ -73,6 +75,9 @@ async def main() -> None:
         drainer_task = asyncio.create_task(
             log_drainer(db, db_log_handler), name="tg115bot-log-drainer"
         )
+    retention_task = asyncio.create_task(
+        log_retention_loop(cfg), name="tg115bot-log-retention"
+    )
     offline_task = asyncio.create_task(offline_watcher(), name="tg115bot-offline")
     rss_task = asyncio.create_task(rss_watcher(), name="tg115bot-rss")
 
@@ -144,6 +149,8 @@ async def main() -> None:
         if drainer_task is not None:
             drainer_task.cancel()
             await asyncio.gather(drainer_task, return_exceptions=True)
+        retention_task.cancel()
+        await asyncio.gather(retention_task, return_exceptions=True)
         offline_task.cancel()
         await asyncio.gather(offline_task, return_exceptions=True)
         rss_task.cancel()

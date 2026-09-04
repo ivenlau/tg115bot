@@ -152,6 +152,9 @@ class TBApp(App):
     #card-api { border: round magenta; }
     #svc-btns { height: auto; margin: 1 0; }
     #svc-btns Button { margin-right: 1; }
+    #task-ops { height: auto; margin: 1 0 0 0; }
+    #task-ops .hint { width: 1fr; margin-top: 0; }
+    #task-ops Button { margin-left: 1; }
     #cfg-switches { height: auto; margin: 0 0 1 0; }
     #cfg-switches Switch { margin: 0 1 0 0; }
     #cfg-switches Label { margin: 0 2 0 0; }
@@ -223,6 +226,17 @@ class TBApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-exit":
             self.exit()
+
+    def deliver_screenshot(self, filename=None, path=None, time_format=None):
+        """命令面板截图：默认写到 ~/Downloads，无桌面服务器该目录常不存在，
+        Textual 的 open() 不建父目录必失败——先建目录，建不起来退回当前目录。"""
+        if path is None:
+            try:
+                from platformdirs import user_downloads_path
+                user_downloads_path().mkdir(parents=True, exist_ok=True)
+            except OSError:
+                path = "."
+        return super().deliver_screenshot(filename, path, time_format)
 
     async def _init_all(self) -> None:
         """建 115 上下文 + DB 句柄（need_login=False，未授权可去配置页扫码）。"""
@@ -464,6 +478,9 @@ class PromptModal(_DialogScreen):
 
 
 class DashboardPage(Page):
+    # 与任务表行对齐的元数据 [(task_id, status, filename)]，随 _refresh_tasks 更新
+    _task_meta: list = []
+
     def compose(self) -> ComposeResult:
         yield Label("📊 仪表盘", classes="page-title")
         with Container(id="dash-cards"):
@@ -476,8 +493,10 @@ class DashboardPage(Page):
             yield Button("停止 (t)", id="btn-stop", variant="error")
             yield Button("重启 (r)", id="btn-restart", variant="warning")
             yield Button("诊断 (d)", id="btn-doctor")
-        yield Label("最近任务（bot 侧：TG 上传/频道监控/备份/直链；5s 刷新）",
-                    classes="hint")
+        with Horizontal(id="task-ops"):
+            yield Label("最近任务（bot 侧：TG 上传/频道监控/备份/直链；5s 刷新）",
+                        classes="hint")
+            yield Button("删记录 (x)", id="op-task-del", variant="error")
         yield DataTable(id="tasks", zebra_stripes=True)
 
     def on_mount(self) -> None:
@@ -610,6 +629,8 @@ class DashboardPage(Page):
                 from core.progress import human_bytes
                 t = self.query_one("#tasks", DataTable)
                 t.clear()
+                self._task_meta = [(r.task_id, r.status, r.filename or "?")
+                                   for r in rows]
                 if not rows:
                     t.add_row("", "暂无任务——向 bot 发送文件即可开始", "", "", "", "")
                     return
@@ -631,12 +652,57 @@ class DashboardPage(Page):
             _post(self.app, apply)
         self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
 
+    # ── 任务记录删除（仅终态：done/failed/cancelled） ──────────────────────
+
+    def op_task_delete(self) -> None:
+        db = self.app.db
+        if db is None:
+            self.app.notify_user("任务数据不可用", True)
+            return
+        t = self.query_one("#tasks", DataTable)
+        if t.cursor_row is None or not 0 <= t.cursor_row < len(self._task_meta):
+            self.app.notify_user("先选中一个任务（↑/↓ 移动光标）", True)
+            return
+        task_id, status, name = self._task_meta[t.cursor_row]
+        if status not in ("done", "failed", "cancelled"):
+            self.app.notify_user("仅完成/失败/已取消的任务可删除记录", True)
+            return
+        label = TASK_LABEL.get(status, status)
+        self.app.push_screen(
+            ConfirmModal("删除任务记录",
+                         f"删除 [bold]{_plain(name)}[/bold]（{label}）的记录？\n"
+                         "仅清掉这条记录，不影响 115 云端文件。",
+                         danger=True),
+            lambda ok: ok and self._do_task_delete(task_id))
+
+    def _do_task_delete(self, task_id: str) -> None:
+        db = self.app.db
+        if db is None:
+            return
+
+        def fill() -> None:
+            async def go():
+                await db.delete_task(task_id)
+            try:
+                self.app._cloud.submit(go()).result(10)
+            except Exception as e:  # noqa: BLE001
+                _post(self.app, self.app.notify_user, f"删除失败: {e}", True)
+                return
+            _post(self.app, self.refresh_dash)
+        self.run_worker(fill, thread=True, group="dash-tasks", exclusive=True)
+
     # ── 服务控制（线程 worker；exclusive 防连点竞态） ─────────────────────
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "op-task-del":
+            self.op_task_delete()
+            return
         self._dispatch(event.button.id or "")
 
     def on_key(self, event) -> None:  # noqa: BLE001
+        if event.key == "x":            # 删除任务记录（与按钮同路）
+            self.op_task_delete()
+            return
         keys = {"s": "btn-start", "t": "btn-stop",
                 "r": "btn-restart", "d": "btn-doctor"}
         bid = keys.get(event.key)

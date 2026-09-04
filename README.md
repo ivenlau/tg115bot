@@ -305,7 +305,7 @@ Python 小工具，**经你在 TG 点确认后**才启用（`/aitools` 管理）
 | `ai.base_url/api_key/model` | 空 | AI 助手（OpenAI 兼容；空=停用） |
 | `web.enable` | false | Web 管理台开关 |
 | `storage.min_free_gb` | 5 | 磁盘可用空间下限，低于则暂停接新任务 |
-| `storage.keep_local` | false | true 时上传成功后保留本地副本到 `<work_dir>/copies/` |
+| `storage.keep_local` | false | true 时上传成功后保留本地副本到 `<work_dir>/copies/`；任务失败时保留 `.part` 现场 |
 
 环境变量可覆盖任意配置：`TG115BOT__段__键=值`（双下划线分层，如 `TG115BOT__TELEGRAM__BOT_TOKEN`）。
 
@@ -344,7 +344,7 @@ tg115bot/
 - 115 风控：内置请求最小间隔 + 抖动 + 指数退避，请勿把并发调得过高。
 - token 过期自动刷新；彻底失效时 `/auth` 重新扫码即可。
 - 大文件全程流式处理（预分配 + 分片 seek 写盘），不占额外内存。
-- `downloads/` 为临时目录，上传成功后自动清理（`storage.keep_local: true` 时保留副本）。
+- `downloads/` 为临时目录，上传成功后自动清理（`storage.keep_local: true` 时成功保留副本、失败保留现场）。
 
 ## 安全须知
 
