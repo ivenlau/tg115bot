@@ -286,9 +286,17 @@ async def cmd_search(ctx: Ctx, args) -> int:
         return 0
     print(f"🔍 {args.keyword}（{len(items)} 项）")
     for it in items:
+        is_dir = entry_is_dir(it)
+        line = f"  {'📂' if is_dir else '📄'} {entry_name(it)}"
+        if is_dir:
+            print(line)
+            continue
         size = entry_size(it)
-        line = f"  {'📂' if entry_is_dir(it) else '📄'} {entry_name(it)}"
-        print(line + (f"  {human_bytes(size)}" if size else ""))
+        sha1 = str(it.get("sha1") or "")
+        extra = f"  {human_bytes(size)}" if size else ""
+        if sha1:
+            extra += f"  sha1={sha1[:8]}"
+        print(line + extra)
     return 0
 
 

@@ -6,6 +6,9 @@ core.app.state 走代理）；本模块是纯「115 文件 -> 本地磁盘」下
 
 链路：find_entry 取 pc -> openapi.get_download_url(pc) -> parse_downurl 归一
 -> download_file 流式写 <dest>.part（边下边算 sha1）-> 校验通过后由调用方改名落地。
+
+download_by_pick_code 是组合入口（pc 直下，不经路径解析）：AI download_115 /
+TUI 搜索下载等「搜索命中即下载」场景用它，省掉 find_entry 的逐层列目录。
 """
 from __future__ import annotations
 
@@ -119,3 +122,28 @@ async def download_file(url: str, dest: Path, *, expected_size: int = 0,
             if attempt < max_attempts:
                 await asyncio.sleep(2 * attempt)
     raise last_err  # pragma: no cover - 循环内必 raise 或 return
+
+
+async def download_by_pick_code(cloud, pick_code: str, dest_dir,
+                                *, on_progress=None) -> dict:
+    """pick_code 直下（搜索结果的 pc 不经路径解析）：downurl -> 流式下载 -> sha1 校验落地。
+
+    与 manual.cmd_download 同一链路（sanitize -> unique_dest -> download_file），
+    入口从「115 路径」换成「pick_code」——搜索命中即可下载，省掉 find_entry
+    的逐层列目录（每次 1~N 个 API 调用）。AI download_115 / TUI 搜索下载共用。
+
+    返回 {"dest": Path, "size": int, "sha1": str}；
+    sha1 不符抛 RuntimeError（.part 现场保留供排查）。
+    """
+    info = parse_downurl(await cloud.raw.get_download_url(pick_code))
+    dest_dir = Path(dest_dir).expanduser()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = unique_dest(dest_dir, sanitize_name(info["file_name"] or "115_file"))
+    size, sha1 = await download_file(info["url"], dest, expected_size=info["file_size"],
+                                     on_progress=on_progress)
+    part = dest.with_name(dest.name + ".part")
+    if info["sha1"] and sha1 != info["sha1"]:
+        raise RuntimeError(
+            f"SHA1 不符（本地 {sha1} ≠ 115 {info['sha1']}），现场保留: {part.name}")
+    part.rename(dest)
+    return {"dest": dest, "size": size, "sha1": sha1}

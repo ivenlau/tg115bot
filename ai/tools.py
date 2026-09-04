@@ -162,7 +162,7 @@ async def _list_115(a):
     return "\n".join(lines)
 
 
-@tool("search_115", "全盘搜索 115 网盘文件。",
+@tool("search_115", "全盘搜索 115 网盘文件。结果含 pick_code（pc），可传给 download_115 直接下载。",
       schema({"keyword": _s("搜索关键词")}, ["keyword"]))
 async def _search_115(a):
     from core.progress import human_bytes
@@ -173,8 +173,31 @@ async def _search_115(a):
     items = data.get("list") or []
     if not items:
         return f"未找到: {a['keyword']}"
-    return "\n".join(
-        f"{it.get('fn') or '?'} ({human_bytes(it.get('fs') or 0)})" for it in items[:20])
+    lines = []
+    for i, it in enumerate(items[:20], 1):
+        name = it.get("fn") or "?"
+        if str(it.get("fc") or "1") == "0":
+            lines.append(f"{i}. [目录] {name}")
+            continue
+        size = int(it.get("fs") or 0)
+        sha1 = str(it.get("sha1") or "")
+        lines.append(f"{i}. {name} ({human_bytes(size)}"
+                     + (f", sha1={sha1[:12]}" if sha1 else "")
+                     + f", pc={it.get('pc', '')})")
+    return "\n".join(lines)
+
+
+@tool("download_115", "下载 115 文件到本地目录（pick_code 来自 search_115 结果的 pc 字段，不经路径解析）。",
+      schema({"pick_code": _s("search_115 结果里的 pc"),
+              "dest_dir": _s("本地目标目录（不存在自动创建）")}, ["pick_code", "dest_dir"]))
+async def _download_115(a):
+    from cloud115.download import download_by_pick_code
+    from core.progress import human_bytes
+    if state.accounts is None:
+        return "❌ 115 未初始化"
+    cloud = await state.accounts.get()
+    r = await download_by_pick_code(cloud, a["pick_code"], a["dest_dir"])
+    return f"✅ 已下载 {human_bytes(r['size'])} -> {r['dest']}（sha1 校验通过）"
 
 
 @tool("move_115", "移动 115 文件/目录到另一目录（目的目录不存在会自动创建）。",

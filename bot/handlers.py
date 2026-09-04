@@ -472,9 +472,17 @@ def register(app) -> None:
         from core.progress import human_bytes as _hb
         lines = [f"🔍 **{keyword}**（{len(items)} 项）"]
         for it in items[:20]:
-            name = it.get("fn") or it.get("n") or it.get("file_name") or "?"
-            size = it.get("fs") or it.get("size") or 0
-            lines.append(f"📄 {name} `{_hb(size)}`" if size else f"📄 {name}")
+            # search_files 已归一 fn/fs/fc/sha1 缩写字段（与 ls 一致）
+            name = it.get("fn") or it.get("file_name") or "?"
+            size = int(it.get("fs") or 0)
+            is_dir = str(it.get("fc") or "1") == "0"
+            seg = f"{'📂' if is_dir else '📄'} {name}"
+            if size:
+                seg += f" `{_hb(size)}`"
+            sha1 = str(it.get("sha1") or "")
+            if sha1 and not is_dir:
+                seg += f" `{sha1[:8]}`"
+            lines.append(seg)
         await message.reply_text("\n".join(lines))
 
     @app.on_message(filters.command("rm"))

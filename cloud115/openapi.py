@@ -496,8 +496,37 @@ class Open115Client:
     def offline_failed(task: Dict[str, Any]) -> bool:
         return task.get("status") == -1
 
+    @staticmethod
+    def search_entry_abbr(it: dict) -> dict:
+        """search 条目 -> 附加缩写字段的副本（fn/fs/pc/fid/fc/pid/sha1）。
+
+        search 接口返回全名字段（file_name/file_size/pick_code/file_category/
+        parent_id），而 ufile/files 列表返回缩写字段（fn/fs/pc/fc/pid）——
+        manual/bot/ai 的 entry helpers 只认缩写，导致 search 结果大小恒为 0。
+        此处归一补齐（原字段保留，additive），两套入口共用一份 helpers。
+        """
+        out = dict(it)
+
+        def _int(v) -> int:
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        out["fn"] = it.get("file_name") or it.get("fn") or ""
+        out["fid"] = str(it.get("file_id") or it.get("fid") or "")
+        out["pc"] = str(it.get("pick_code") or it.get("pc") or "")
+        out["sha1"] = str(it.get("sha1") or "").lower()
+        out["fs"] = _int(it.get("file_size", it.get("fs")))
+        out["fc"] = str(it.get("file_category", it.get("fc", "1")))
+        out["pid"] = str(it.get("parent_id") or it.get("pid") or "")
+        return out
+
     async def search_files(self, keyword: str, limit: int = 20) -> Dict[str, Any]:
-        """全盘搜索文件/目录。GET /open/ufile/search（上限 1 万条，count 仅作参考）。"""
+        """全盘搜索文件/目录。GET /open/ufile/search（上限 1 万条，count 仅作参考）。
+
+        条目经 search_entry_abbr 归一（附 fn/fs/pc 等缩写字段，原字段保留）。
+        """
         resp = await self._request(
             "GET", f"{BASE_API}/open/ufile/search",
             params={"aid": 1, "cid": 0, "limit": limit, "offset": 0,
@@ -506,11 +535,14 @@ class Open115Client:
         if not self._ok(resp):
             return {"list": [], "error": str(resp)[:200]}
         data = resp.get("data")
+        raw = None
         if isinstance(data, list):
-            return {"list": data}
-        if isinstance(data, dict) and isinstance(data.get("list"), list):
+            raw = data
+        elif isinstance(data, dict) and isinstance(data.get("list"), list):
+            raw = data["list"]
+            data["list"] = [self.search_entry_abbr(it) for it in raw]
             return data
-        return {"list": []}
+        return {"list": [self.search_entry_abbr(it) for it in (raw or [])]}
 
     async def delete_files(self, file_ids) -> bool:
         """删除文件/目录（入回收站）。POST /open/ufile/delete，file_ids 逗号分隔。"""
