@@ -1,17 +1,21 @@
 # tg115bot
 
-**高性能 Telegram → 115 网盘机器人**：接收 TG 视频/文件，自动下载并上传到 115 网盘；支持 115 离线、RSS、频道监控、AI 助手；裸 `tb` 进 TUI，跨 Linux/macOS/Windows 一键安装。
+接收 TG 视频/文件，自动下载并上传到 115 网盘；支持 115 离线、RSS、频道监控、AI 助手；跨 Linux/macOS/Windows 一键安装；统一命令行工具 tb 并附带 TUI，管理操作便捷。
 
-<table>
-<tr>
-<td align="center" width="50%"><img src="docs/screenshots/dashboard.svg" width="380"><br><b>仪表盘</b><br>四卡状态 + 最近任务</td>
-<td align="center" width="50%"><img src="docs/screenshots/file.svg" width="380"><br><b>文件</b><br>115 网盘远程管理</td>
-</tr>
-<tr>
-<td align="center" width="50%"><img src="docs/screenshots/offline.svg" width="380"><br><b>离线任务</b><br>磁链 / ed2k / 直链</td>
-<td align="center" width="50%"><img src="docs/screenshots/config.svg" width="380"><br><b>配置</b><br>参数 + 115 授权</td>
-</tr>
-</table>
+<img src="docs/screenshots/dashboard.png" width="780">
+<p align="center"><em>仪表盘：四卡状态 + 最近任务</em></p>
+
+<img src="docs/screenshots/file.png" width="780">
+<p align="center"><em>文件：115 网盘远程管理</em></p>
+
+<img src="docs/screenshots/offline.png" width="780">
+<p align="center"><em>离线任务：磁链 / ed2k / 直链</em></p>
+
+<img src="docs/screenshots/config.png" width="780">
+<p align="center"><em>配置：参数 + 115 授权</em></p>
+
+<img src="docs/screenshots/log.png" width="780">
+<p align="center"><em>日志：实时跟踪 stdout / 业务日志</em></p>
 
 ## 特性
 
