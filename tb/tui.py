@@ -773,6 +773,10 @@ class FilesPage(Page):
         super().__init__()
         self.path = "/tg115bot"
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
+        # 搜索结果模式：结果渲染进主表格（多一列 sha1），回车/s 按 pick_code 直下
+        self._in_search = False
+        self._search_results: list[dict] = []
+        self._search_kw = ""
 
     def compose(self) -> ComposeResult:
         yield Label("📁 文件（115 网盘）", classes="page-title")
@@ -784,6 +788,7 @@ class FilesPage(Page):
             yield Button("重命名 (n)", id="op-rename", variant="warning")
             yield Button("移动 (m)", id="op-move")
             yield Button("新建 (+)", id="op-mkdir", variant="success")
+            yield Button("搜索 (f)", id="op-search")
             yield Button("刷新 (r)", id="op-refresh")
         with Horizontal(id="upload-row"):
             yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
@@ -798,9 +803,17 @@ class FilesPage(Page):
         self.load_dir()
 
     def load_dir(self) -> None:
+        # 离开搜索模式：复位标记与列（搜索多一列 sha1）；ctx 未就绪也要先复位，
+        # 否则 add_row(3 值) 会撞上 4 列表格
+        self._in_search = False
+        self._search_results = []
+        t0 = self.query_one("#files", DataTable)
+        if len(t0.columns) != 3:
+            t0.clear(columns=True)
+            t0.add_columns("类型", "名称", "大小")
         ctx = self.app_ctx
         if ctx is None:
-            self.query_one("#files", DataTable).add_row("❓", self.app.ctx_error or "初始化中…", "")
+            t0.add_row("❓", self.app.ctx_error or "初始化中…", "")
             return
         self._load_gen += 1
         gen = self._load_gen
@@ -851,7 +864,12 @@ class FilesPage(Page):
             row = self.query_one("#files", DataTable).get_row(event.row_key)
         except Exception:  # noqa: BLE001 -- 行已被 clear/重建
             return
-        if not row or not str(row[0]).startswith("📂"):
+        if not row:
+            return
+        if self._in_search:
+            self._search_row_activated(row)
+            return
+        if not str(row[0]).startswith("📂"):
             return
         name = str(row[1])     # 名字取行数据（未用 key，key 是自动生成的）
         if name == "..":
@@ -865,6 +883,16 @@ class FilesPage(Page):
 
     def on_key(self, event) -> None:  # noqa: BLE001
         # 快捷键与按钮同路；弹窗打开时按键被模态屏拦截，不会误触
+        if event.key == "f":
+            self.op_search()
+            return
+        if event.key == "s" and self._in_search:
+            # 搜索模式下 s 与回车同路（pick_code 直下），路径式下载不适用
+            self._search_activate_current()
+            return
+        if event.key in ("d", "n", "m", "+", "plus") and self._in_search:
+            self._guard_search_mode()
+            return
         acts = {"r": self.op_refresh, "d": self.op_delete, "s": self.op_download,
                 "n": self.op_rename, "m": self.op_move}
         if event.key in acts:
@@ -875,11 +903,21 @@ class FilesPage(Page):
             self.query_one("#upload-input", Input).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "op-search":
+            self.op_search()
+            return
+        if bid == "op-dl" and self._in_search:
+            self._search_activate_current()
+            return
+        if bid in ("op-del", "op-rename", "op-move", "op-mkdir") and self._in_search:
+            self._guard_search_mode()
+            return
         ops = {"op-del": self.op_delete, "op-dl": self.op_download,
                "op-rename": self.op_rename, "op-move": self.op_move,
                "op-mkdir": self.op_mkdir, "op-upload": self._submit_upload,
                "op-refresh": self.op_refresh}
-        fn = ops.get(event.button.id or "")
+        fn = ops.get(bid)
         if fn:
             fn()
 
@@ -930,6 +968,139 @@ class FilesPage(Page):
 
     def op_refresh(self) -> None:
         self.load_dir()
+
+    # ── 全盘搜索：结果渲染进主表格（多一列 sha1），回车/s 按 pick_code 直下 ──
+
+    def _guard_search_mode(self) -> None:
+        """搜索结果模式下拦截依赖「当前目录」上下文的操作（del/rename/move/mkdir）。"""
+        self.app.notify_user("搜索结果模式：回车或 s 下载选中项，r 返回浏览", True)
+
+    def op_search(self) -> None:
+        if self._need_ctx() is None:
+            return
+        self.app.push_screen(
+            PromptModal("搜索", "全盘搜索 115 网盘，输入关键词：",
+                        placeholder="如 1080p / 文件名片段",
+                        validator=lambda v: None if v.strip() else "关键词不能为空"),
+            lambda v: v is not None and self._search(v.strip()))
+
+    def _search(self, kw: str) -> None:
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        self._load_gen += 1
+        gen = self._load_gen
+
+        def fill() -> None:
+            async def go():
+                data = await ctx.cloud.raw.search_files(kw, limit=50)
+                return data.get("list") or []
+            try:
+                items = self.app._cloud.submit(go()).result(60)
+            except Exception as e:  # noqa: BLE001
+                _post(self.app, self.app.notify_user, f"搜索失败: {e}", True)
+                return
+
+            def apply() -> None:
+                if gen != self._load_gen:      # 期间已导航/再搜索，丢弃过期结果
+                    return
+                from core.progress import human_bytes
+                self._in_search = True
+                self._search_results = list(items)
+                self._search_kw = kw
+                t = self.query_one("#files", DataTable)
+                t.clear(columns=True)
+                t.add_columns("类型", "名称", "大小", "sha1")
+                t.add_row("📂", "..", "", "")   # 回车返回浏览模式
+                for it in items:
+                    is_dir = str(it.get("fc") or "1") == "0"
+                    sha1 = str(it.get("sha1") or "")
+                    t.add_row("📂" if is_dir else "📄",
+                              str(it.get("fn") or "?"),
+                              "" if is_dir else human_bytes(int(it.get("fs") or 0)),
+                              "" if is_dir else sha1[:8])
+                self.query_one("#files-path", Static).update(
+                    f"🔍 搜索“{kw}”（{len(items)} 项）　回车/s 下载　r 返回浏览")
+                t.focus()
+            _post(self.app, apply)
+        self.run_worker(fill, thread=True)
+
+    def _search_activate_current(self) -> None:
+        """s 键 / 下载按钮在搜索模式下激活当前光标行（与回车同路）。"""
+        t = self.query_one("#files", DataTable)
+        if t.cursor_row is None or t.cursor_row < 0:
+            return
+        try:
+            row = t.get_row_at(t.cursor_row)
+        except Exception:  # noqa: BLE001
+            return
+        self._search_row_activated(row)
+
+    def _search_row_activated(self, row) -> None:
+        name = str(row[1])
+        if name == "..":
+            self.op_refresh()             # 返回浏览模式（load_dir 复位标记与列）
+            return
+        t = self.query_one("#files", DataTable)
+        idx = t.cursor_row - 1            # 减去首行 ..
+        if idx < 0 or idx >= len(self._search_results):
+            return
+        it = self._search_results[idx]
+        if str(it.get("fc") or "1") == "0":
+            self.app.notify_user("目录下载不支持（搜索结果无路径上下文，v1 仅文件）", True)
+            return
+        pc = str(it.get("pc") or "")
+        if not pc:
+            self.app.notify_user("结果缺 pick_code，无法下载", True)
+            return
+        fname = str(it.get("fn") or "?")
+        self.app.push_screen(
+            PromptModal("下载",
+                        f"下载 [bold]{_plain(fname)}[/bold] 到本地目录（自动创建）：",
+                        placeholder="~/Downloads",
+                        validator=lambda v: None if v else "本地目录不能为空"),
+            lambda v: v is not None and self._download_by_pc(fname, pc,
+                                                             Path(v).expanduser()))
+
+    def _download_by_pc(self, name: str, pc: str, dest_dir: Path) -> None:
+        """pick_code 直下（搜索命中即下载，不经 find_entry 路径解析）。"""
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+            return
+        status = self.query_one("#dl-status", Static)
+        status.remove_class("hidden")
+        status.update(f"📥 {name}  准备中…")
+        last = [0.0]
+
+        def on_progress(written: int, total: int) -> None:
+            now = time.monotonic()
+            if now - last[0] < 1.0 and written != total:
+                return
+            last[0] = now
+            from core.progress import human_bytes
+            pct = f" {written * 100 // total}%" if total else ""
+            _post(self.app, status.update,
+                  f"📥 {name}  {human_bytes(written)}{pct}")
+
+        def dl() -> None:
+            from cloud115.download import download_by_pick_code
+            from core.progress import human_bytes
+
+            async def go():
+                return await download_by_pick_code(ctx.cloud, pc, dest_dir,
+                                                   on_progress=on_progress)
+            try:
+                r = self.app._cloud.submit(go()).result()
+            except Exception as e:  # noqa: BLE001 -- 含 sha1 不符（.part 现场保留）
+                _post(self.app, status.update, f"❌ 下载失败: {e}")
+                _post(self.app, self.app.notify_user, f"下载失败: {e}", True)
+                return
+            _post(self.app, status.update,
+                  f"✅ {r['dest'].name}  {human_bytes(r['size'])}  ->  {r['dest']}")
+            _post(self.app, self.app.notify_user, f"✅ 已下载到 {r['dest']}")
+        self.run_worker(dl, thread=True)
 
     def op_delete(self) -> None:
         if self._need_ctx() is None:
