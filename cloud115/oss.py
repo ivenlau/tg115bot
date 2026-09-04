@@ -102,6 +102,12 @@ async def fast_upload(
         raise RuntimeError(f"upload/init 未返回 OSS 参数: {str(data)[:200]}")
 
     token = await api.get_upload_token()
+
+    async def _refresher():
+        """闭包:每次返回新 STS dict。仅在 STS 过期时被调用以续传。
+        保持 oss_upload 不知道 Open115Client 的存在,反向依赖隔离。"""
+        return await api.get_upload_token()
+
     if on_progress:
         try:
             await on_progress(0, size)
@@ -115,6 +121,7 @@ async def fast_upload(
         concurrency=concurrency,
         on_progress=on_progress,
         cancel_event=cancel_event,
+        token_refresher=_refresher,
     )
     log.info("OSS 直传完成: %s -> cid=%s", filename, cid)
     return FastResult("oss", data)

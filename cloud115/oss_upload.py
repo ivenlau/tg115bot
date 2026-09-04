@@ -47,6 +47,44 @@ _READ = 1024 * 1024
 
 _UPLOAD_ID_RE = re.compile(r"<UploadId>([^<]+)</UploadId>")
 
+# STS 凭证相关 OSS 错误码(均对应 HTTP 403)—— 触发 token 刷新 + list_parts 续传
+_STS_ERROR_CODES = frozenset({
+    "InvalidAccessKeyId", "SecurityTokenExpired", "InvalidSecurityToken",
+})
+
+# OSS ListPartsResult XML 解析(>1000 part 才翻页,本期不翻页)
+_PART_RE = re.compile(
+    r"<Part>\s*<PartNumber>(\d+)</PartNumber>\s*<ETag>([^<]*)</ETag>",
+    re.DOTALL,
+)
+_IS_TRUNCATED_RE = re.compile(r"<IsTruncated>(true|1)</IsTruncated>", re.IGNORECASE)
+
+
+class _StsExpiredError(Exception):
+    """OSS 返回 403 + STS Code,触发 token 刷新 + 续传。
+
+    加入 with_backoff.no_retry,避免被重试同一过期 token;由 _put_parts 捕获后走续传路径。
+    """
+
+    def __init__(self, status: int, text: str):
+        super().__init__(oss_error_summary(status, text))
+        self.status = status
+        self.text = text
+
+
+class AuthRequiredError(RuntimeError):
+    """连续多次 STS refresh 失败,需外层走账号冷却/重新登录流程。"""
+
+
+class _SessionDead(Exception):
+    """OSS multipart session 已死(NoSuchUpload),需重新 init + 全传。
+    由 _multipart_list_parts 抛,_put_parts 主循环 catch 后从头开始。
+    """
+
+
+# 单文件内连续 refresh 失败上限;达到后抛 AuthRequiredError
+MAX_REFRESH_FAILS = 3
+
 
 # ── 纯函数 ─────────────────────────────────────────────────────────────────
 def determine_partsize(size: int) -> int:
@@ -153,6 +191,32 @@ def oss_error_summary(status: int, text: str) -> str:
     return out
 
 
+def is_sts_error(status: int, text: str) -> bool:
+    """判断 OSS 响应是否为 STS 凭证问题(可触发 token 刷新 + 续传)。
+
+    只识别 HTTP 403 + 三种 Code;SignatureDoesNotMatch/RequestTimeTooSkewed
+    是签名/时钟问题,重试无效,必须排除。
+    """
+    if status != 403:
+        return False
+    m = re.search(r"<Code>([^<]*)</Code>", text)
+    return bool(m and m.group(1) in _STS_ERROR_CODES)
+
+
+def _parse_list_parts_xml(text: str) -> List[Tuple[int, str]]:
+    """解析 OSS ListPartsResult XML。
+
+    返回按 PartNumber 升序的 (part_number, etag) 列表;ETag 保留引号原样。
+    IsTruncated=true 时记 WARNING 日志(单文件 < 10GB 不会触发;本期不翻页,
+    fallback 到"放弃漏报 part + complete 失败 + 外层重试"策略)。
+    """
+    if _IS_TRUNCATED_RE.search(text):
+        log.warning("OSS ListParts IsTruncated=true,分片数 >1000,本实现不翻页")
+    parts = [(int(n), e) for n, e in _PART_RE.findall(text)]
+    parts.sort(key=lambda p: p[0])
+    return parts
+
+
 # ── 上传执行 ───────────────────────────────────────────────────────────────
 def _part_reader(path: Path, offset: int, length: int):
     """按 [offset, offset+length) 流式读文件的异步生成器。"""
@@ -185,8 +249,13 @@ async def upload_to_oss(
     concurrency: int = 8,
     on_progress: Optional[ProgressCb] = None,
     cancel_event: Optional[asyncio.Event] = None,
+    token_refresher: Optional[Callable[[], Awaitable[Dict[str, str]]]] = None,
 ) -> None:
-    """把文件直传 115 的 OSS。小文件单 PUT；大文件 multipart 并发。成功返回，失败抛异常。"""
+    """把文件直传 115 的 OSS。小文件单 PUT；大文件 multipart 串行。成功返回，失败抛异常。
+
+    token_refresher: 可选异步闭包,返回新 STS dict(同 get_upload_token 格式)。
+                    在 _put_parts 检测到 STS 错误时被调用以续传,缺省时保持旧行为(token 锁死)。
+    """
     base = object_url(endpoint, bucket, obj)
     cb_headers = callback_headers(callback)
 
@@ -200,9 +269,19 @@ async def upload_to_oss(
     log.info("OSS multipart: %d parts x %dMB", total_parts, partsize // 1024 // 1024)
 
     upload_id = await _multipart_init(session, base, token)
-    parts = await _put_parts(session, base, local_path, size, partsize, total_parts,
-                             token, upload_id, concurrency, on_progress, cancel_event)
-    await _multipart_complete(session, base, upload_id, parts, token, cb_headers)
+    try:
+        parts, final_upload_id, final_token = await _put_parts(
+            session, base, local_path, size, partsize, total_parts,
+            token, upload_id, concurrency, on_progress, cancel_event,
+            token_refresher=token_refresher,
+        )
+        await _multipart_complete(session, base, final_upload_id, parts, final_token, cb_headers)
+    except TaskCancelled:
+        # 用户取消:best-effort 释放 OSS 残留(abort 失败吞掉,不阻塞 cancel 语义)
+        await _multipart_abort(session, base, upload_id, token)
+        raise
+    # AuthRequiredError 不 abort — 让外层 with_backoff 重试整个 fast_upload,
+    # 旧的 uploadId 7 天内会被 OSS 自动回收
 
 
 async def _put_single(session, base, local_path, size, token, cb_headers,
@@ -239,41 +318,122 @@ async def _multipart_init(session, base, token) -> str:
 
 async def _put_parts(session, base, local_path, size, partsize, total_parts,
                      token, upload_id: str, concurrency, on_progress,
-                     cancel_event) -> List[Tuple[int, str]]:
+                     cancel_event, *, token_refresher=None):
     """串行按序上传分片。
 
-    init 带 sequential=1（照抄 p115oss 协议），OSS 强制分片号严格按序提交，
-    并发 PUT 会触发 PartNotSequential（p115oss 本身也是串行迭代器）。
-    单文件内串行；速度由单流吞吐决定，TG 下载侧仍并行。concurrency 参数保留备用。
-    """
-    parts: List[Tuple[int, str]] = []
-    done_bytes = 0
-    for number in range(1, total_parts + 1):
-        if cancel_event is not None and cancel_event.is_set():
-            raise TaskCancelled()
-        offset = (number - 1) * partsize
-        length = min(partsize, size - offset)
-        url = f"{base}?partNumber={number}&uploadId={quote(upload_id)}"
+    init 带 sequential=1(照抄 p115oss 协议),OSS 强制分片号严格按序提交,
+    并发 PUT 会触发 PartNotSequential(p115oss 本身也是串行迭代器)。
+    单文件内串行;速度由单流吞吐决定,TG 下载侧仍并行。concurrency 参数保留备用。
 
+    续传逻辑(需 token_refresher):
+      - 单 part 内循环:STS 错误 → refresh → list_parts → 重试当前 part(若必要)
+      - refresh 失败按"单 part 内连续失败"计数,达到 MAX_REFRESH_FAILS → AuthRequiredError
+      - refresh 失败后继续重试当前 part(期待再次 STS → 再次 refresh,直到成功或抛错)
+      - list_parts 返 NoSuchUpload → 重新 init + 全传(放弃已成功 part)
+
+    返回 (parts, final_upload_id, final_token) — id 可能是重新 init 后的,
+    token 可能是刷新后的;complete 必须用这二者,否则续传后仍 403。
+    """
+    # mutable 容器便于闭包共享/重写
+    state = {"token": token, "upload_id": upload_id, "refresh_fails": 0}
+    parts: Dict[int, str] = {}
+    done_bytes = 0
+    start = 1
+    while True:
+        try:
+            for number in range(start, total_parts + 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise TaskCancelled()
+                # list_parts 已记录的 part 直接跳过(只在续传分支被注入)
+                if number in parts:
+                    done_bytes += min(partsize, size - (number - 1) * partsize)
+                    if on_progress:
+                        await on_progress(done_bytes, size)
+                    continue
+
+                offset = (number - 1) * partsize
+                length = min(partsize, size - offset)
+                url = f"{base}?partNumber={number}&uploadId={quote(state['upload_id'])}"
+                etag = await _put_one_part(session, base, local_path, offset, length,
+                                           number, url, parts, state, cancel_event,
+                                           token_refresher)
+                parts[number] = etag
+                done_bytes += length
+                if on_progress:
+                    await on_progress(done_bytes, size)
+            return sorted(parts.items()), state["upload_id"], state["token"]
+        except _SessionDead:
+            # OSS session 已死(NoSuchUpload):重新 init + 全传
+            log.warning("OSS session 已死,重新 init + 从头传")
+            state["upload_id"] = await _multipart_init(session, base, state["token"])
+            parts.clear()
+            start = 1
+            done_bytes = 0
+            continue
+
+
+async def _put_one_part(session, base, local_path, offset, length, number, url,
+                        parts: Dict[int, str], state: dict,
+                        cancel_event, token_refresher) -> str:
+    """单 part 内循环:普通 PUT → STS 错误 → refresh + list_parts + 重试。
+
+    state["token"] / state["upload_id"] / state["refresh_fails"] 由本函数读写。
+    返回 ETag 或抛 AuthRequiredError / TaskCancelled。
+    """
+    while True:
         async def _attempt() -> str:
-            # 每次尝试重建 reader（流式 body 不可重用）与签名（date 会变）
-            headers = oss_v1_sign("PUT", url, token,
+            # 每次尝试重建 reader(流式 body 不可重用)与签名(date 会变)
+            # 通过闭包读 state["token"](Python 闭包按引用捕获 dict 元素)
+            headers = oss_v1_sign("PUT", url, state["token"],
                                   {"content-type": "application/octet-stream"})
             async with session.put(url, data=_part_reader(local_path, offset, length),
                                    headers=headers) as r:
                 if r.status >= 400:
                     body = await r.text()
+                    if token_refresher is not None and is_sts_error(r.status, body):
+                        raise _StsExpiredError(r.status, body)
                     raise RuntimeError(
                         f"OSS 分片#{number} PUT 失败: {oss_error_summary(r.status, body)}")
                 return r.headers.get("ETag", "")
 
-        etag = await with_backoff(_attempt, base=2.0, max_retries=3,
-                                  no_retry=(TaskCancelled,))
-        parts.append((number, etag))
-        done_bytes += length
-        if on_progress:
-            await on_progress(done_bytes, size)
-    return parts
+        try:
+            return await with_backoff(_attempt, base=2.0, max_retries=3,
+                                      no_retry=(TaskCancelled, _StsExpiredError))
+        except _StsExpiredError:
+            # ── 单 part 内的续传触发点 ──
+            if token_refresher is None:
+                raise RuntimeError(
+                    "STS 过期但未提供 token_refresher(传 token_refresher 给 upload_to_oss 启用续传)"
+                ) from None
+            try:
+                state["token"] = await token_refresher()
+                state["refresh_fails"] = 0
+                log.warning("STS 已刷新,触发续传 part#%d", number)
+            except Exception as ref_e:  # noqa: BLE001
+                state["refresh_fails"] += 1
+                log.error("STS refresh 失败 (%d/%d): %r",
+                          state["refresh_fails"], MAX_REFRESH_FAILS, ref_e)
+                if state["refresh_fails"] >= MAX_REFRESH_FAILS:
+                    raise AuthRequiredError(
+                        f"连续 {MAX_REFRESH_FAILS} 次 STS refresh 失败"
+                    ) from ref_e
+                # refresh 失败:重试当前 part(期待再次 STS → 再次 refresh)
+                continue
+
+            existing = await _multipart_list_parts(session, base,
+                                                   state["upload_id"],
+                                                   state["token"])
+            if not existing:
+                # _multipart_list_parts 已经在内部抛 _SessionDead,正常走不到这里
+                raise _SessionDead()   # 防御性
+            for n, e in existing:
+                parts[n] = e
+            if number in parts:
+                # 当前 part 在 list_parts 中已存在(网络抖动期间服务端已记录)
+                return parts[number]
+            # 重新拼 url 用新 upload_id,然后 continue 重试 _attempt
+            url = f"{base}?partNumber={number}&uploadId={quote(state['upload_id'])}"
+            continue
 
 
 async def _multipart_complete(session, base, upload_id, parts, token, cb_headers) -> None:
@@ -284,3 +444,40 @@ async def _multipart_complete(session, base, upload_id, parts, token, cb_headers
         if r.status >= 400:
             raise RuntimeError(f"OSS complete 失败: {oss_error_summary(r.status, text)}")
     log.info("OSS complete 成功: %d parts", len(parts))
+
+
+async def _multipart_list_parts(session, base, upload_id, token):
+    """GET ?uploadId=ID。返回已成功的 (PartNumber, ETag) 列表。
+
+    抛 _SessionDead:NoSuchUpload(session 已死,需 _put_parts 主循环重新 init + 全传)。
+    抛 RuntimeError:其他 4xx(签名/网络等)。
+    """
+    url = f"{base}?uploadId={quote(upload_id)}"
+    headers = oss_v1_sign("GET", url, token)
+    async with session.get(url, headers=headers) as r:
+        text = await r.text()
+        if r.status == 404 or "NoSuchUpload" in text:
+            log.warning("OSS session 已失效 (NoSuchUpload),需重新 init")
+            raise _SessionDead()
+        if r.status >= 400:
+            raise RuntimeError(f"OSS ListParts 失败: {oss_error_summary(r.status, text)}")
+    return _parse_list_parts_xml(text)
+
+
+async def _multipart_abort(session, base, upload_id, token) -> None:
+    """DELETE ?uploadId=ID。**仅用于用户取消路径**,续传路径不调。
+
+    任意 status / 异常都吞掉只 log warning — cancel 语义绝不能被 abort 失败阻塞;
+    OSS 端 multipart session 7 天自动 GC,abort 失败时残留影响有限。
+    """
+    url = f"{base}?uploadId={quote(upload_id)}"
+    try:
+        headers = oss_v1_sign("DELETE", url, token)
+        async with session.delete(url, headers=headers) as r:
+            if r.status >= 400:
+                log.warning("OSS abort 失败 status=%d (忽略): %s",
+                            r.status, (await r.text())[:200])
+            else:
+                log.info("OSS abort 完成: uploadId=%s", upload_id[:12])
+    except Exception as e:  # noqa: BLE001
+        log.warning("OSS abort 异常 (忽略): %r", e)
