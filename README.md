@@ -52,6 +52,8 @@ curl -fsSL https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/insta
 irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 | iex
 ```
 
+> Windows 不部署代理：自行安装 Clash / v2rayN 等系统代理软件后，把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy`。
+
 装完即有 `tb` 命令：
 
 ```bash
@@ -61,24 +63,6 @@ tb doctor    # 一键体检：环境 / 授权 / 磁盘 / 代理安全 / 服务�
 tb start     # 后台启动服务（SSH 断开不影响）
 tb           # 进入交互 TUI；tb --help 看全部命令
 ```
-
-### Windows 部署
-
-Windows 版不部署代理——自行安装 Clash / v2rayN 等系统代理软件，初始化时把本地监听地址（如 `http://127.0.0.1:7890`）填进 `telegram.proxy`。
-
-```powershell
-irm https://raw.githubusercontent.com/ivenlau/tg115bot/main/scripts/install.ps1 | iex
-tb init      # 初始化（含可选开始菜单快捷方式）
-tb start     # 启动
-```
-
-服务管理与 Linux 同构（`start / stop / restart / status / log`）：后台隐藏窗口运行，PID 校验防误杀，日志同样双份滚动。开机自启（可选）：
-
-```powershell
-schtasks /Create /SC ONSTART /TN tg115bot /TR "powershell -ExecutionPolicy Bypass -File <项目路径>\scripts\service.ps1 start"
-```
-
-或源码方式：`git clone` 后 `powershell -ExecutionPolicy Bypass -File scripts\init.ps1`。
 
 ### Docker 部署
 
@@ -95,27 +79,34 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-### 手动安装
+### 源码部署
 
 <details>
-<summary>展开手动步骤</summary>
+<summary>展开源码部署步骤</summary>
 
 ```bash
-# 1. 依赖（Python >= 3.12；pyrofork 为 pyrogram 维护分支，API 一致）
+# 1. 克隆本项目
+git clone https://github.com/ivenlau/tg115bot.git
+cd tg115bot
+
+# 2. 依赖（Python >= 3.12；pyrofork 为 pyrogram 维护分支，API 一致）
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. 配置
-cp config.yaml.example config.yaml    # 填 telegram 段与 proxy
-# api_id / hash: https://my.telegram.org ；bot_token: @BotFather
-# 国内服务器 proxy: "http://127.0.0.1:7890"（mihomo 混合端口）
+# 3. 配置 + 115 授权（二选一）
+./scripts/init.sh                     # 交互式初始化：代理/配置/扫码全程引导，幂等可重跑
+                                      # （也含依赖安装——直接跑它可跳过第 2 步）
+# 或手动：cp config.yaml.example config.yaml 后编辑 telegram 段与 proxy
+#   （api_id / hash: https://my.telegram.org ；bot_token: @BotFather）
+#   再执行 python scripts/check115.py --auth 扫码授权
 
-# 3. 115 授权（终端二维码扫码）
-python scripts/check115.py --auth
-
-# 4. 前台运行（调试用；长期运行建议 service.sh）
-python main.py
+# 4. 启动（任选其一）
+python main.py                        # 前台运行（调试用）
+./scripts/service.sh start            # 后台服务（Linux / macOS）
+python -m tb start                    # 等价 tb start（未装 tb 命令时）
 ```
+
+Windows：`git clone` 后 `powershell -ExecutionPolicy Bypass -File scripts\init.ps1` 初始化，`.\scripts\service.ps1 start` 启动，服务管理与 Linux 同构。
 
 可选：`python scripts/check115.py` 跑一次上传链路自检（会在 115 留 3 个测试文件，可删）。
 
