@@ -788,7 +788,7 @@ class FilesPage(Page):
             yield Button("重命名 (n)", id="op-rename", variant="warning")
             yield Button("移动 (m)", id="op-move")
             yield Button("新建 (+)", id="op-mkdir", variant="success")
-            yield Button("搜索 (f)", id="op-search")
+            yield Button("搜索 (f)", id="op-search", variant="primary")
             yield Button("刷新 (r)", id="op-refresh")
         with Horizontal(id="upload-row"):
             yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
