@@ -89,13 +89,22 @@ def _case_files_page_duplicate_names_ok() -> None:
 
 
 def _case_files_page_action_inputs() -> None:
-    """通用动作弹框：s 下载 / n 重命名（预填旧名）/ Esc 收起。"""
+    """操作弹窗：快捷键/按钮同路；重命名预填旧名；校验不过弹窗不关；Esc 取消。"""
     import asyncio
-    from tb.tui import TBApp
+    from types import SimpleNamespace
+
+    from tb.tui import ConfirmModal, PromptModal, TBApp
+
+    async def stub_init(self):
+        self.ctx = SimpleNamespace(cloud=SimpleNamespace(raw=SimpleNamespace()),
+                                   account=SimpleNamespace(name="test"))
+        self.db = None
+    TBApp._init_all = stub_init
 
     async def go():
+        from textual.widgets import Button, Input, Static
         app = TBApp()
-        async with app.run_test(size=(110, 32)) as pilot:
+        async with app.run_test(size=(110, 34)) as pilot:
             await pilot.pause(0.2)
             app.query_one("#nav").index = 1
             await pilot.pause(0.5)
@@ -105,21 +114,61 @@ def _case_files_page_action_inputs() -> None:
             t.add_row("📄", "a.mkv", "1G")
             t.move_cursor(row=0)
             t.focus()
-            inp = page.query_one("#action-input")
-            assert inp.has_class("hidden")
+
+            # s → 下载弹 PromptModal，Esc 取消
             await pilot.press("s")
             await pilot.pause(0.2)
-            assert not inp.has_class("hidden"), "s 应弹出下载输入框"
+            assert isinstance(app.screen, PromptModal), "s 应弹下载输入框"
             await pilot.press("escape")
-            await pilot.pause(0.1)
-            assert inp.has_class("hidden")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, PromptModal)
+
+            # n → 预填旧名；清空提交 → 红字校验、弹窗不关；合法值回车 → 关闭
             await pilot.press("n")
             await pilot.pause(0.2)
-            assert not inp.has_class("hidden") and inp.value == "a.mkv", \
-                "n 应弹出重命名输入框并预填旧名"
+            m = app.screen
+            assert isinstance(m, PromptModal)
+            inp = m.query_one("#dlg-input", Input)
+            assert inp.value == "a.mkv", "重命名应预填旧名"
+            inp.value = ""
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, PromptModal), "校验失败不应关闭"
+            assert str(m.query_one("#dlg-err", Static).render()).strip(), "应有红字提示"
+            inp.value = "b.mkv"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert not isinstance(app.screen, PromptModal), "合法值应提交关闭"
+
+            # 按钮与快捷键同路：op-rename 弹 PromptModal
+            page.query_one("#op-rename", Button).press()
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, PromptModal)
             await pilot.press("escape")
-            await pilot.pause(0.1)
-            assert inp.has_class("hidden")
+            await pilot.pause(0.2)
+
+            # 上传：常驻输入框 + 按钮；空输入禁用，u 聚焦，提交后清空复位
+            up_btn = page.query_one("#op-upload", Button)
+            up_inp = page.query_one("#upload-input", Input)
+            assert up_btn.disabled, "空输入时上传按钮应禁用"
+            await pilot.press("u")
+            await pilot.pause(0.2)
+            assert up_inp.has_focus, "u 应聚焦上传输入框"
+            await pilot.press(*"/tmp/tui-no-such")
+            await pilot.pause(0.2)
+            assert not up_btn.disabled, "有内容时上传按钮应可用"
+            up_btn.press()
+            await pilot.pause(0.6)
+            assert up_inp.value == "" and up_btn.disabled, "提交后应清空并禁用"
+
+            # d → 删除走 ConfirmModal，取消不执行（焦点回表格，d 才是快捷键）
+            t.focus()
+            await pilot.press("d")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ConfirmModal), "删除应走确认框"
+            app.screen.query_one("#dlg-cancel", Button).press()
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, ConfirmModal)
     asyncio.run(go())
 
 
@@ -144,7 +193,7 @@ def _case_dashboard_service_buttons_stub() -> None:
                 page.query_one("#btn-start", Button).press()   # 启动无破坏性：直通
                 await pilot.pause(0.5)
                 assert calls == ["start"], calls
-                page.query_one("#btn-stop", Button).press()    # 停止：弹确认
+                await pilot.press("t")                         # 快捷键停止：弹确认
                 await pilot.pause(0.3)
                 assert isinstance(app.screen, ConfirmModal), "停止应弹确认框"
                 app.screen.query_one("#dlg-ok", Button).press()
@@ -189,6 +238,43 @@ def _case_dashboard_doctor_stub() -> None:
         tb_ops.doctor_checks = orig
 
 
+def _case_offline_page_ops_stub() -> None:
+    """离线页：添加输入框+按钮联动（空禁用）；a 聚焦；无选中按 d 只提示不炸。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from tb.tui import TBApp
+
+    async def stub_init(self):
+        self.ctx = SimpleNamespace(cloud=SimpleNamespace(raw=SimpleNamespace()),
+                                   account=SimpleNamespace(name="test"))
+        self.db = None
+    TBApp._init_all = stub_init
+
+    async def go():
+        from textual.widgets import Button, Input
+        app = TBApp()
+        async with app.run_test(size=(110, 32)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one("#nav").index = 2
+            await pilot.pause(0.5)
+            page = app.query_one("#content OfflinePage")
+            add_btn = page.query_one("#op-off-add", Button)
+            add_inp = page.query_one("#off-add", Input)
+            assert add_btn.disabled, "空输入时添加按钮应禁用"
+            await pilot.press("a")
+            await pilot.pause(0.2)
+            assert add_inp.has_focus, "a 应聚焦添加输入框"
+            await pilot.press(*"magnet:?xt=stub")
+            await pilot.pause(0.2)
+            assert not add_btn.disabled, "有内容时添加按钮应可用"
+            # 无选中按 d：toast 提示，不炸
+            page.query_one("#off-t").focus()
+            await pilot.press("d")
+            await pilot.pause(0.3)
+    asyncio.run(go())
+
+
 def _case_config_page_headless() -> None:
     """配置页：双 Tab、开关/编辑器就位、坏文本保存被拦且不落盘。"""
     import asyncio
@@ -213,6 +299,13 @@ def _case_config_page_headless() -> None:
                 assert "telegram:" in ta.text
                 page.cfg_path = victim                # 重定向，绝不碰真实配置
                 ta.text = "telegram: [坏yaml"
+                ta.focus()                            # 编辑区内按 s：应输入字母不触发保存
+                await pilot.pause(0.1)
+                await pilot.press("s")
+                await pilot.pause(0.3)
+                assert ta.text != "telegram: [坏yaml" and "s" in ta.text, \
+                    "编辑区按键应输入字母"
+                assert "未保存" not in str(page.query_one("#cfg-status").render())
                 page.query_one("#cfg-save").press()
                 await pilot.pause(0.3)
                 assert "未保存" in str(page.query_one("#cfg-status").render())

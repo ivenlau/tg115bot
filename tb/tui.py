@@ -1,6 +1,7 @@
 """Textual TUI——裸 `tb` 的交互模式（P2）。
 
-五个页面：仪表盘 / 文件 / 离线任务 / 日志 / 授权。侧栏导航 + Footer 快捷键。
+五个页面：仪表盘 / 文件 / 离线任务 / 日志 / 授权。侧栏导航；标题栏右侧退出按钮，
+底部状态栏时钟（q 快捷键仍可退出）。
 数据层与 CLI 完全共用（manual.py 的 helpers + cloud115 client），TUI 只是视图。
 
 关键设计——常驻 115 循环：
@@ -24,7 +25,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
+from textual.widgets import (Button, DataTable, Header, Input, Label,
                              ListView, ListItem, RichLog, Static, Switch,
                              TabbedContent, TabPane, TextArea)
 
@@ -126,6 +127,12 @@ class TBApp(App):
     TITLE = "tg115bot"
     CSS = """
     Screen { layout: horizontal; }
+    HeaderClockSpace { display: none; }   /* 时钟移到状态栏，去掉头部右侧占位 */
+    #btn-exit { dock: right; height: 1; width: auto; min-width: 4; padding: 0 1;
+                background: transparent; border: none; color: $text-muted; }
+    #btn-exit:hover { background: $error; color: $text; }
+    #statusbar { dock: bottom; height: 1; background: $footer-background;
+                 color: $footer-key-foreground; padding: 0 1; }
     #sidebar { width: 26; border-right: solid $primary-darken-1; background: $surface; padding: 1; height: 1fr; }
     #sidebar ListView { height: auto; }
     #nav > ListItem { color: $text-muted; padding: 0 1; margin-bottom: 1; background: transparent; border-left: tall transparent; }
@@ -152,6 +159,23 @@ class TBApp(App):
     #cfg-btns { height: auto; margin: 1 0; }
     #cfg-btns Button { margin-right: 1; }
     #dl-status { color: $text-muted; }
+    #file-ops { height: auto; margin: 1 0; }
+    #file-ops Button { margin-right: 1; }
+    /* 下载/移动无对应语义 variant，自定义色模仿 variant 的上下边框结构 */
+    #op-dl { background: #0f766e; border-top: tall #14b8a6; border-bottom: tall #115e59;
+             color: $button-color-foreground; }
+    #op-dl:hover { background: #115e59; border-top: tall #0f766e; border-bottom: tall #134e4a; }
+    #op-move { background: #6d28d9; border-top: tall #8b5cf6; border-bottom: tall #5b21b6;
+               color: $button-color-foreground; }
+    #op-move:hover { background: #5b21b6; border-top: tall #6d28d9; border-bottom: tall #4c1d95; }
+    #upload-row { height: auto; margin: 0 0 1 0; }
+    #upload-row Input { width: 1fr; }
+    #upload-row Button { margin-left: 1; }
+    #off-ops { height: auto; margin: 1 0; }
+    #off-ops Button { margin-right: 1; }
+    #off-add-row { height: auto; margin: 0 0 1 0; }
+    #off-add-row Input { width: 1fr; }
+    #off-add-row Button { margin-left: 1; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; }
     """
@@ -167,14 +191,14 @@ class TBApp(App):
         self._cloud = _CloudLoop()
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header(icon="📦", show_clock=False)
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield ListView(*[ListItem(Label(f"{icon} {name}"))
                                  for icon, name in NAV_ITEMS], id="nav")
                 yield Static("初始化中…", id="side-status")
             yield Container(id="content")
-        yield Footer()
+        yield Static(time.strftime("%H:%M:%S"), id="statusbar")
 
     def on_mount(self) -> None:
         # 初始化整体投给常驻循环 fire-and-forget：退出时可被真取消，不占线程
@@ -183,6 +207,22 @@ class TBApp(App):
         self.query_one("#nav", ListView).index = 0   # 触发 Highlighted -> 挂载首页
         self.set_interval(5, self._refresh_side)     # 侧栏底部小卡（账号/服务点）
         self._refresh_side()
+        self.set_interval(1, self._tick)             # 状态栏时钟（到秒）
+        self.call_after_refresh(self._mount_exit_btn)
+
+    async def _mount_exit_btn(self) -> None:
+        """标题栏右上退出按钮（HeaderIcon/HeaderTitle 非公开 API，只能注入挂载）。"""
+        await self.query_one(Header).mount(Button("❌", id="btn-exit"))
+
+    def _tick(self) -> None:
+        try:
+            self.query_one("#statusbar", Static).update(time.strftime("%H:%M:%S"))
+        except Exception:  # noqa: BLE001 -- 页面未挂载/退出竞态时忽略
+            pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-exit":
+            self.exit()
 
     async def _init_all(self) -> None:
         """建 115 上下文 + DB 句柄（need_login=False，未授权可去配置页扫码）。"""
@@ -324,6 +364,8 @@ class _DialogScreen(ModalScreen):
            border: round $accent; padding: 1 2; }
     .dlg-title { text-style: bold; color: $text; margin-bottom: 1; }
     .dlg-msg { margin-bottom: 1; }
+    #dlg-input { width: 64; }
+    #dlg-err { height: auto; }
     .dlg-btns { height: auto; align-horizontal: right; }
     .dlg-btns Button { margin-left: 1; }
     """
@@ -370,6 +412,57 @@ class InfoModal(_DialogScreen):
         self.dismiss(None)
 
 
+class PromptModal(_DialogScreen):
+    """输入型弹窗：Enter/确认=dismiss(输入值)；Esc/取消=dismiss(None)。
+
+    validator(值) -> 错误文案 | None：返回文案时弹窗内红字提示、不关闭。
+    """
+
+    def __init__(self, title: str, message: str = "", value: str = "",
+                 placeholder: str = "", validator=None) -> None:
+        super().__init__()
+        self.dlg_title = title
+        self.message = message
+        self.init_value = value
+        self.placeholder = placeholder
+        self.validator = validator
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dlg"):
+            yield Label(self.dlg_title, classes="dlg-title")
+            if self.message:
+                yield Static(self.message, classes="dlg-msg")
+            yield Input(value=self.init_value, placeholder=self.placeholder,
+                        id="dlg-input")
+            yield Static("", id="dlg-err")
+            with Horizontal(classes="dlg-btns"):
+                yield Button("取消", id="dlg-cancel", variant="default")
+                yield Button("确认", id="dlg-ok", variant="primary")
+
+    def on_mount(self) -> None:
+        inp = self.query_one("#dlg-input", Input)
+        inp.focus()
+        if self.init_value:
+            inp.action_select_all()   # 预填全选：直接打字即覆盖
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "dlg-ok":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        val = self.query_one("#dlg-input", Input).value.strip()
+        err = self.validator(val) if self.validator else None
+        if err:
+            self.query_one("#dlg-err", Static).update(f"[red]{err}[/red]")
+            return
+        self.dismiss(val)
+
+
 class DashboardPage(Page):
     def compose(self) -> ComposeResult:
         yield Label("📊 仪表盘", classes="page-title")
@@ -379,10 +472,10 @@ class DashboardPage(Page):
             yield Static("", id="card-cloud", classes="dash-card")
             yield Static("", id="card-api", classes="dash-card")
         with Horizontal(id="svc-btns"):
-            yield Button("启动", id="btn-start", variant="success")
-            yield Button("停止", id="btn-stop", variant="error")
-            yield Button("重启", id="btn-restart", variant="warning")
-            yield Button("诊断", id="btn-doctor")
+            yield Button("启动 (s)", id="btn-start", variant="success")
+            yield Button("停止 (t)", id="btn-stop", variant="error")
+            yield Button("重启 (r)", id="btn-restart", variant="warning")
+            yield Button("诊断 (d)", id="btn-doctor")
         yield Label("最近任务（bot 侧：TG 上传/频道监控/备份/直链；5s 刷新）",
                     classes="hint")
         yield DataTable(id="tasks", zebra_stripes=True)
@@ -392,6 +485,8 @@ class DashboardPage(Page):
         t.add_columns("时间", "文件名", "大小", "状态", "进度", "方式")
         self.every(5, self.refresh_dash)
         self.refresh_dash()
+        # 页面内要有焦点，快捷键才能冒泡到页面（否则进了侧栏导航）
+        self.call_after_refresh(self.query_one("#btn-start", Button).focus)
 
     def refresh_dash(self) -> None:
         self._card_service()
@@ -539,7 +634,16 @@ class DashboardPage(Page):
     # ── 服务控制（线程 worker；exclusive 防连点竞态） ─────────────────────
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        bid = event.button.id or ""
+        self._dispatch(event.button.id or "")
+
+    def on_key(self, event) -> None:  # noqa: BLE001
+        keys = {"s": "btn-start", "t": "btn-stop",
+                "r": "btn-restart", "d": "btn-doctor"}
+        bid = keys.get(event.key)
+        if bid:
+            self._dispatch(bid)
+
+    def _dispatch(self, bid: str) -> None:
         if bid == "btn-doctor":
             self._run_doctor()
             return
@@ -574,6 +678,12 @@ class DashboardPage(Page):
     def _set_buttons(self, enabled: bool) -> None:
         for b in self.query(Button):
             b.disabled = not enabled
+        if not enabled:
+            return
+        try:    # 动作结束恢复页内焦点：禁用期间焦点会被挪走，快捷键将失效
+            self.query_one("#btn-start", Button).focus()
+        except Exception:  # noqa: BLE001 -- 页面已卸载等竞态
+            pass
 
     def _run_doctor(self) -> None:
         from tb import ops
@@ -596,19 +706,24 @@ class FilesPage(Page):
     def __init__(self) -> None:
         super().__init__()
         self.path = "/tg115bot"
-        self._pending: tuple[str, str] | None = None   # (动作, 目标名)：download/rename/move/mkdir
         self._load_gen = 0      # 代际号：导航后的过期刷新结果不再落表
 
     def compose(self) -> ComposeResult:
         yield Label("📁 文件（115 网盘）", classes="page-title")
         yield Static(self.path, id="files-path")
         yield DataTable(id="files", cursor_type="row", zebra_stripes=True)
-        yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
-                    id="upload-input")
-        yield Input(placeholder="动作输入框", id="action-input", classes="hidden")
+        with Horizontal(id="file-ops"):
+            yield Button("删除 (d)", id="op-del", variant="error")
+            yield Button("下载 (s)", id="op-dl")
+            yield Button("重命名 (n)", id="op-rename", variant="warning")
+            yield Button("移动 (m)", id="op-move")
+            yield Button("新建 (+)", id="op-mkdir", variant="success")
+            yield Button("刷新 (r)", id="op-refresh")
+        with Horizontal(id="upload-row"):
+            yield Input(placeholder="上传：输入本地文件/目录/通配符路径后回车（如 /data/photos 或 D:\\p*.jpg）",
+                        id="upload-input")
+            yield Button("上传 (u)", id="op-upload", variant="primary", disabled=True)
         yield Static("", id="dl-status", classes="hidden")
-        yield Label("回车=进入 · d=删除(弹窗确认) · s=下载 · n=重命名 · m=移动 · +=新建 · r=刷新 · 输入框=上传",
-                    classes="hint")
 
     def on_mount(self) -> None:
         t = self.query_one("#files", DataTable)
@@ -683,35 +798,43 @@ class FilesPage(Page):
         self.load_dir()
 
     def on_key(self, event) -> None:  # noqa: BLE001
-        if event.key == "r":
-            self.load_dir()
-        elif event.key == "d":
-            self._try_delete()
-        elif event.key == "s":
-            sel = self._selected()
-            if sel and sel[0].startswith("📂"):
-                self.app.notify_user("目录下载 v1 不支持（逐文件取直链会快速烧 API 配额）", True)
-            elif sel:
-                self._ask("download", sel[1],
-                          f"下载 {sel[1]} 到本地目录（回车开始，Esc 取消）")
-        elif event.key == "n":
-            sel = self._selected()
-            if sel:
-                self._ask("rename", sel[1],
-                          f"重命名 {sel[1]} 为（回车确认，Esc 取消）", prefill=sel[1])
-        elif event.key == "m":
-            sel = self._selected()
-            if sel:
-                self._ask("move", sel[1],
-                          f"移动 {sel[1]} 到 115 目录（不存在自动创建，Esc 取消）",
-                          prefill=self.path)
+        # 快捷键与按钮同路；弹窗打开时按键被模态屏拦截，不会误触
+        acts = {"r": self.op_refresh, "d": self.op_delete, "s": self.op_download,
+                "n": self.op_rename, "m": self.op_move}
+        if event.key in acts:
+            acts[event.key]()
         elif event.key in ("+", "plus"):
-            self._ask("mkdir", "",
-                      f"在 {self.path} 下新建目录（回车创建，Esc 取消）")
-        elif event.key == "escape":
-            self._cancel_ask()
+            self.op_mkdir()
+        elif event.key == "u":        # 高频操作：一键聚焦上传输入框
+            self.query_one("#upload-input", Input).focus()
 
-    # ── 通用动作弹框：一个隐藏 Input 承载 download/rename/move/mkdir ─────
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        ops = {"op-del": self.op_delete, "op-dl": self.op_download,
+               "op-rename": self.op_rename, "op-move": self.op_move,
+               "op-mkdir": self.op_mkdir, "op-upload": self._submit_upload,
+               "op-refresh": self.op_refresh}
+        fn = ops.get(event.button.id or "")
+        if fn:
+            fn()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "upload-input":
+            self.query_one("#op-upload", Button).disabled = not event.value.strip()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "upload-input":
+            self._submit_upload()
+
+    def _submit_upload(self) -> None:
+        """上传入口（输入框回车 / 上传按钮共用）；提交后清空输入并复位按钮。"""
+        inp = self.query_one("#upload-input", Input)
+        src = inp.value.strip()
+        if not src:
+            return
+        inp.value = ""                # 触发 Input.Changed -> 按钮自动禁用
+        self._do_upload(src)
+
+    # ── 操作入口：按钮/快捷键共用；参数走 PromptModal，删除走 ConfirmModal ──
 
     def _selected(self) -> tuple[str, str] | None:
         """当前光标行 (类型icon, 名字)；无效或 .. 返回 None。"""
@@ -727,21 +850,74 @@ class FilesPage(Page):
             return None
         return str(row[0]), name
 
-    def _ask(self, action: str, name: str, placeholder: str, prefill: str = "") -> None:
-        self._pending = (action, name)
-        inp = self.query_one("#action-input", Input)
-        inp.placeholder = placeholder
-        inp.value = prefill
-        inp.remove_class("hidden")
-        self.call_after_refresh(inp.focus)
+    def _need_ctx(self):
+        ctx = self.app_ctx
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
+        return ctx
 
-    def _cancel_ask(self) -> None:
-        self._pending = None
-        try:
-            self.query_one("#action-input", Input).add_class("hidden")
-            self.query_one("#files", DataTable).focus()
-        except Exception:  # noqa: BLE001
-            pass
+    def _need_selected(self) -> tuple[str, str] | None:
+        sel = self._selected()
+        if sel is None:
+            self.app.notify_user("先选中一个条目（↑/↓ 移动光标）", True)
+        return sel
+
+    def op_refresh(self) -> None:
+        self.load_dir()
+
+    def op_delete(self) -> None:
+        if self._need_ctx() is None:
+            return
+        sel = self._need_selected()
+        if sel is None:
+            return
+        self.app.push_screen(
+            ConfirmModal("删除文件",
+                         f"删除 [bold]{_plain(sel[1])}[/bold]？\n移入 115 回收站，可在网盘恢复。",
+                         danger=True),
+            lambda ok: ok and self._do_delete(sel[1]))
+
+    def op_download(self) -> None:
+        if self._need_ctx() is None:
+            return
+        sel = self._need_selected()
+        if sel is None:
+            return
+        if sel[0].startswith("📂"):
+            self.app.notify_user("目录下载 v1 不支持（逐文件取直链会快速烧 API 配额）", True)
+            return
+        self.app.push_screen(
+            PromptModal("下载", f"下载 [bold]{_plain(sel[1])}[/bold] 到本地目录（自动创建）：",
+                        placeholder="~/Downloads",
+                        validator=lambda v: None if v else "本地目录不能为空"),
+            lambda v: v is not None and self._download(sel[1], Path(v).expanduser()))
+
+    def op_rename(self) -> None:
+        sel = self._need_selected()
+        if sel is None:
+            return
+        self.app.push_screen(
+            PromptModal("重命名", f"重命名 [bold]{_plain(sel[1])}[/bold] 为：", value=sel[1],
+                        validator=lambda v: None if v and "/" not in v else "新名不能为空且不含 /"),
+            lambda v: v is not None and self._rename(sel[1], v))
+
+    def op_move(self) -> None:
+        sel = self._need_selected()
+        if sel is None:
+            return
+        self.app.push_screen(
+            PromptModal("移动",
+                        f"移动 [bold]{_plain(sel[1])}[/bold] 到 115 目录（不存在自动创建）：",
+                        value=self.path,
+                        validator=lambda v: None if v else "目标目录不能为空"),
+            lambda v: v is not None and self._move(sel[1], v))
+
+    def op_mkdir(self) -> None:
+        self.app.push_screen(
+            PromptModal("新建目录", f"在 [bold]{_plain(self.path)}[/bold] 下新建目录：",
+                        validator=lambda v: None if v and "/" not in v
+                        else "目录名不能为空且不含 /（逐级进入再建）"),
+            lambda v: v is not None and self._mkdir(v))
 
     def _download(self, name: str, dest_dir: Path) -> None:
         ctx = self.app_ctx
@@ -886,24 +1062,6 @@ class FilesPage(Page):
             _post(self.app, self.app.notify_user, f"✅ 已创建 {target}")
         self.run_worker(fill, thread=True)
 
-    def _try_delete(self) -> None:
-        ctx = self.app_ctx
-        t = self.query_one("#files", DataTable)
-        if ctx is None or t.cursor_row is None or t.cursor_row < 0:
-            return
-        try:
-            row = t.get_row_at(t.cursor_row)
-        except Exception:  # noqa: BLE001
-            return
-        name = str(row[1])
-        if name == "..":
-            return
-        self.app.push_screen(
-            ConfirmModal("删除文件",
-                         f"删除 [bold]{_plain(name)}[/bold]？\n移入 115 回收站，可在网盘恢复。",
-                         danger=True),
-            lambda ok: ok and self._do_delete(name))
-
     def _do_delete(self, name: str) -> None:
         ctx = self.app_ctx
         if ctx is None:
@@ -922,29 +1080,7 @@ class FilesPage(Page):
         self.run_worker(fill, thread=True)
         self.app.notify_user(f"🧹 已删除 {name}（回收站可恢复）")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "action-input":
-            raw = event.value.strip()
-            pending, self._pending = self._pending, None
-            self._cancel_ask()
-            if not raw or not pending:
-                return
-            action, name = pending
-            if action == "download":
-                self._download(name, Path(raw).expanduser())
-            elif action == "rename":
-                self._rename(name, raw)
-            elif action == "move":
-                self._move(name, raw)
-            elif action == "mkdir":
-                self._mkdir(raw)
-            return
-        if event.input.id != "upload-input":
-            return
-        src = event.value.strip()
-        if not src:
-            return
-        event.input.value = ""
+    def _do_upload(self, src: str) -> None:
         ctx = self.app_ctx
         if ctx is None:
             self.app.notify_user("115 未就绪", error=True)
@@ -981,9 +1117,13 @@ class OfflinePage(Page):
     def compose(self) -> ComposeResult:
         yield Label("⏬ 115 离线任务（30s 自动刷新）", classes="page-title")
         yield DataTable(id="off-t", cursor_type="row", zebra_stripes=True)
-        yield Input(placeholder="添加：粘贴 magnet/ed2k/直链 后回车（保存到 upload.target_dir）",
-                    id="off-add")
-        yield Label("r=刷新 · d=删除选中任务（连文件）", classes="hint")
+        with Horizontal(id="off-ops"):
+            yield Button("删除任务 (d)", id="op-off-del", variant="error")
+            yield Button("刷新 (r)", id="op-off-refresh")
+        with Horizontal(id="off-add-row"):
+            yield Input(placeholder="添加：粘贴 magnet/ed2k/直链 后回车（保存到 upload.target_dir）",
+                        id="off-add")
+            yield Button("添加 (a)", id="op-off-add", variant="primary", disabled=True)
 
     def on_mount(self) -> None:
         t = self.query_one("#off-t", DataTable)
@@ -1026,15 +1166,44 @@ class OfflinePage(Page):
             self.refresh_list()
         elif event.key == "d":
             self._delete_selected()
+        elif event.key == "a":        # 快速进入添加输入框
+            self.query_one("#off-add", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        ops = {"op-off-del": self._delete_selected,
+               "op-off-refresh": self.refresh_list,
+               "op-off-add": self._submit_add}
+        fn = ops.get(event.button.id or "")
+        if fn:
+            fn()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "off-add":
+            self.query_one("#op-off-add", Button).disabled = not event.value.strip()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "off-add":
+            self._submit_add()
+
+    def _submit_add(self) -> None:
+        """添加入口（输入框回车 / 按钮共用）；提交后清空并复位按钮。"""
+        inp = self.query_one("#off-add", Input)
+        url = inp.value.strip()
+        if not url:
+            return
+        inp.value = ""
+        self._do_add(url)
 
     def _delete_selected(self) -> None:
         ctx = self.app_ctx
         t = self.query_one("#off-t", DataTable)
-        if ctx is None or t.cursor_row is None or t.cursor_row < 0:
+        if ctx is None:
+            self.app.notify_user("115 未就绪", error=True)
             return
         try:
             row = t.get_row_at(t.cursor_row)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 -- 空表/无选中
+            self.app.notify_user("先选中一个任务（↑/↓ 移动光标）", True)
             return
         ih = str(row[3])
         if not ih:
@@ -1059,13 +1228,7 @@ class OfflinePage(Page):
         self.run_worker(fill, thread=True)
         self.app.notify_user(f"🧹 已删离线任务 {ih}…")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "off-add":
-            return
-        url = event.value.strip()
-        if not url:
-            return
-        event.input.value = ""
+    def _do_add(self, url: str) -> None:
         ctx = self.app_ctx
         if ctx is None:
             self.app.notify_user("115 未就绪", error=True)
@@ -1141,9 +1304,9 @@ class ConfigPage(Page):
                     yield Label("频道监控")
                 yield TextArea("", id="cfg-text", show_line_numbers=True)
                 with Horizontal(id="cfg-btns"):
-                    yield Button("保存并校验", id="cfg-save", variant="primary")
-                    yield Button("重新加载", id="cfg-reload")
-                    yield Button("重启服务", id="cfg-restart", variant="warning")
+                    yield Button("保存并校验 (s)", id="cfg-save", variant="primary")
+                    yield Button("重新加载 (l)", id="cfg-reload")
+                    yield Button("重启服务 (r)", id="cfg-restart", variant="warning")
                 yield Static("", id="cfg-status")
                 yield Label("保存为全文写回（自动备份 config.yaml.bak.<时间戳>）；"
                             "大部分参数需重启服务生效", classes="hint")
@@ -1152,6 +1315,8 @@ class ConfigPage(Page):
 
     def on_mount(self) -> None:
         self._reload()
+        # 页面内要有焦点，快捷键才能冒泡到页面；聚焦保存键（不在编辑区）
+        self.call_after_refresh(self.query_one("#cfg-save", Button).focus)
         # 开关初值来自当前配置
         try:
             from scripts import manual
@@ -1190,7 +1355,18 @@ class ConfigPage(Page):
             self._status(f"{label} 修改失败: {msg}", error=True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        bid = event.button.id or ""
+        self._dispatch(event.button.id or "")
+
+    def on_key(self, event) -> None:  # noqa: BLE001
+        # 焦点在编辑区（TextArea/Input）时不劫持字母键，避免影响配置编辑
+        if isinstance(self.screen.focused, (TextArea, Input)):
+            return
+        keys = {"s": "cfg-save", "l": "cfg-reload", "r": "cfg-restart"}
+        bid = keys.get(event.key)
+        if bid:
+            self._dispatch(bid)
+
+    def _dispatch(self, bid: str) -> None:
         if bid == "cfg-save":
             from tb import ops
             text = self.query_one("#cfg-text", TextArea).text
@@ -1206,7 +1382,7 @@ class ConfigPage(Page):
         elif bid == "cfg-reload":
             self._reload()
         elif bid == "cfg-restart":
-            btn = event.button
+            btn = self.query_one("#cfg-restart", Button)
 
             def cb(ok: bool) -> None:
                 if not ok:
