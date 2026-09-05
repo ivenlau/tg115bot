@@ -1,6 +1,7 @@
-"""tg115bot 入口：组装并启动 日志 + DB + 多账号 115 + 队列 + Pyrogram + 频道监控 + Web 台。
+"""tg115bot 入口：组装并启动 日志 + DB + 多账号 115 + 队列 + Web 台 + Pyrogram + 频道监控。
 
 Phase 3-4：持久化、多账号轮转、频道监控、Web 管理台、凭据加密、结构化日志。
+Web 台先于 Pyrogram 拉起——TG 连接失败/重试期间管理台与日志页仍可用。
 """
 from __future__ import annotations
 
@@ -112,6 +113,9 @@ async def main() -> None:
         state.monitor = monitor
         log.info("频道监控已启用，规则 %d 条", monitor.rule_count)
 
+    # ── Web 管理台（先于 TG 连接拉起：代理不通/连不上时管理台与日志页仍可用）──
+    web = await _start_web(cfg)
+
     await bot.start()
     if user is not None:
         try:
@@ -132,9 +136,6 @@ async def main() -> None:
         await load_dynamic_tools()
         await load_sessions()
         log.info("AI 助手已启用（模型=%s，工具=%d）", cfg.ai.model, len(_ai_tools.TOOLS))
-
-    # ── Web 管理台 ───────────────────────────────────────────────────────
-    web = await _start_web(cfg)
 
     try:
         await asyncio.Event().wait()  # 永久挂起直到被停止
