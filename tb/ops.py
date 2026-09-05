@@ -216,10 +216,15 @@ def doctor_checks() -> list[tuple[str, bool, str]]:
     has_cfg = (INSTALL_DIR / "config.yaml").exists()
     checks.append(("config.yaml", has_cfg, "存在" if has_cfg else "缺失（先跑 tb init）"))
 
-    # 115 探活（委托 check115 --probe，轻量不产生上传）
+    # 115 探活（委托 check115 --probe，轻量不产生上传）。
+    # 子进程管道强制 UTF-8：中文 Windows 上管道 stdout 默认 GBK，脚本打印的
+    # ✅/❌ 编不出会 UnicodeEncodeError 崩掉（诊断误报「授权失败」）；父进程
+    # 解码同步显式 UTF-8，errors=replace 兜底任何杂字节。
     if has_cfg:
         r = subprocess.run([sys.executable, str(SCRIPTS / "check115.py"), "--probe"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         probe_out = (r.stdout or r.stderr).strip().splitlines()
         detail = probe_out[-1] if probe_out else f"exit {r.returncode}"
         checks.append(("115 授权", r.returncode == 0, detail))

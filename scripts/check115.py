@@ -102,7 +102,24 @@ def _print_qr(data: str) -> None:
     print("   ", data, "\n")
 
 
+def _force_utf8_pipe() -> None:
+    """被管道/重定向调用时强制 UTF-8 输出（镜像 main.py 的 _force_utf8_stdio）。
+
+    中文 Windows 上管道 stdout 默认跟随 locale（GBK），脚本打印的 ✅/❌ 编不出
+    会 UnicodeEncodeError 直接崩——tb doctor 的探活子进程即此形态。交互控制台
+    不动（Python 走 WriteConsoleW，本就正常）。
+    """
+    for s in (sys.stdout, sys.stderr):
+        try:
+            if s is not None and not s.isatty() \
+                    and (s.encoding or "").lower().replace("-", "") != "utf8":
+                s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 -- 编码兜底失败不影响主流程
+            pass
+
+
 async def main() -> None:
+    _force_utf8_pipe()
     cfg = load_config()
     rate = RateLimiter(cfg.rate115.min_interval_sec)
     cloud = Cloud115Client(cfg.primary_account, cfg.session_dir, rate)
