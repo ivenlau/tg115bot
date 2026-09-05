@@ -119,7 +119,19 @@ class RotatingStdout:
         self._open()
 
     def _open(self) -> None:
-        self._f = open(self._path, "ab")
+        try:
+            self._f = open(self._path, "ab")
+        except PermissionError as e:
+            # Windows + service.ps1：cmd `>>` 重定向句柄由本进程终身持有且不共享
+            # 写，对同一文件再 open 必撞 ERROR_SHARING_VIOLATION（tb start 传的是
+            # CPython 全共享句柄、nohup 无共享模式概念，均不会走到这里）。
+            # 回退为复制继承的 stdout 句柄——与重定向指向同一内核文件对象，绕开
+            # 共享检查。代价：该形态下轮转失效（rename 被原句柄挡住，write() 已
+            # 兜底不崩），stdout.log 增长到重启为止；换回的是 service.ps1 可用。
+            try:
+                self._f = os.fdopen(os.dup(1), "ab")
+            except OSError:
+                raise e          # 连可继承的 stdout 都没有（几乎不会发生），维持原报错
         try:
             self._size = self._path.stat().st_size
         except OSError:
