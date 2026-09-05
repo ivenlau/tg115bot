@@ -6,57 +6,122 @@
   <title>{% block title %}tg115bot{% endblock %} · 管理台</title>
   <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
   <style>
-    :root { --bg:#1e1e2e; --panel:#2a2a3c; --fg:#e4e4ef; --muted:#9a9ab0; --acc:#89b4fa; --ok:#a6e3a1; --warn:#f9e2af; --err:#f38ba8; }
+    :root { --bg:#1e1e2e; --panel:#2a2a3c; --fg:#e4e4ef; --muted:#9a9ab0; --acc:#89b4fa; --ok:#a6e3a1; --warn:#f9e2af; --err:#f38ba8; --cyan:#89dceb; --magenta:#f5c2e7; }
     * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans CJK SC",sans-serif; }
-    header { display:flex; gap:18px; align-items:center; padding:10px 18px; background:#181825; border-bottom:1px solid #313244; flex-wrap:wrap; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans CJK SC",sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+
+    /* ── 顶栏（TUI Header：📦 标题） ── */
+    header { display:flex; gap:14px; align-items:center; padding:10px 18px; background:#181825; border-bottom:1px solid #313244; flex:none; }
     header h1 { font-size:16px; margin:0; font-weight:600; }
-    nav a { color:var(--muted); text-decoration:none; padding:6px 10px; border-radius:6px; }
-    nav a:hover { background:#313244; color:var(--fg); }
-    nav a.active { background:var(--acc); color:#1e1e2e; font-weight:600; }
-    main { padding:18px; max-width:1200px; margin:0 auto; }
+    header .hint { margin-left:auto; }
+
+    /* ── 主体：侧栏 + 内容 ── */
+    .wrap { display:flex; flex:1; min-height:0; }
+    nav#sidebar { width:216px; flex:none; background:#181825; border-right:1px solid #313244; padding:12px 10px; display:flex; flex-direction:column; gap:2px; overflow-y:auto; }
+    nav#sidebar a { display:flex; gap:9px; align-items:center; color:var(--muted); text-decoration:none; padding:7px 10px; border-radius:8px; border-left:3px solid transparent; }
+    nav#sidebar a:hover { background:#313244; color:var(--fg); }
+    nav#sidebar a.active { background:#313244; color:var(--fg); font-weight:600; border-left-color:var(--acc); }
+    #side-status { margin-top:auto; border:1px solid #313244; border-radius:10px; padding:10px 12px; font-size:12.5px; color:var(--muted); line-height:1.7; }
+    main { flex:1; min-width:0; overflow-y:auto; padding:18px 22px; }
+
+    /* ── 底部状态栏（TUI statusbar：时钟） ── */
+    footer { flex:none; display:flex; align-items:center; gap:14px; padding:5px 16px; background:#181825; border-top:1px solid #313244; color:var(--muted); font-size:12px; }
+    footer .mono { margin-left:auto; }
+
     .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); margin-bottom:18px; }
     .card { background:var(--panel); border:1px solid #313244; border-radius:10px; padding:14px; }
     .card h3 { margin:0 0 8px; font-size:12px; text-transform:uppercase; color:var(--muted); letter-spacing:.5px; }
     .big { font-size:26px; font-weight:700; }
+    /* TUI 仪表盘四卡的类型色边框：磁盘黄 / 115 空间青 / API 品红 / 秒传绿 */
+    .acc-disk { border-color:var(--warn); }
+    .acc-cloud { border-color:var(--cyan); }
+    .acc-api { border-color:var(--magenta); }
+    .acc-ok { border-color:var(--ok); }
+
     table { width:100%; border-collapse:collapse; background:var(--panel); border-radius:10px; overflow:hidden; }
     th,td { padding:8px 10px; text-align:left; border-bottom:1px solid #313244; }
     th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+    tr:last-child td { border-bottom:0; }
+    tbody tr:nth-child(even), tr:nth-child(even) { background:rgba(255,255,255,.025); }
+    tr:hover { background:rgba(137,180,250,.07); }
     td.mono, .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
     .badge { padding:1px 7px; border-radius:10px; font-size:11px; }
     .ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)} .muted{color:var(--muted)}
     .bar { height:6px; background:#313244; border-radius:3px; overflow:hidden; margin-top:4px; }
     .bar > div { height:100%; background:var(--acc); }
+
     form.inline { display:inline; }
     input,select,textarea { background:#181825; color:var(--fg); border:1px solid #313244; border-radius:6px; padding:6px 8px; font:inherit; }
     button,.btn { background:var(--acc); color:#1e1e2e; border:0; border-radius:6px; padding:6px 12px; font-weight:600; cursor:pointer; text-decoration:none; }
     button.danger { background:var(--err); color:#1e1e2e; }
     button.ghost,.btn.ghost { background:#313244; color:var(--fg); font-weight:400; }
+    /* TUI variant 对齐：warning 琥珀 / success 绿 / 下载青 / 移动紫 */
+    button.warn { background:var(--warn); color:#1e1e2e; }
+    button.success { background:var(--ok); color:#1e1e2e; }
+    button.teal { background:#0f766e; color:var(--fg); }
+    button.purple { background:#6d28d9; color:var(--fg); }
+
     .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .hint { color:var(--muted); font-size:12px; }
+    .page-title { font-size:17px; font-weight:700; margin:0 0 14px; }
+    main a { color:var(--acc); }
+
     dialog { background:var(--panel); color:var(--fg); border:1px solid #313244; border-radius:10px; padding:18px; min-width:360px; max-width:92vw; }
     dialog::backdrop { background:rgba(0,0,0,.55); }
     dialog h3 { margin:0 0 6px; }
     pre.log { background:#181825; border:1px solid #313244; border-radius:10px; padding:12px; overflow:auto; max-height:62vh; font-size:12px; line-height:1.45; white-space:pre-wrap; word-break:break-all; }
+
+    @media (max-width: 880px) {
+      body { overflow:auto; height:auto; }
+      .wrap { flex-direction:column; }
+      nav#sidebar { width:auto; flex-direction:row; flex-wrap:wrap; align-items:center; border-right:0; border-bottom:1px solid #313244; }
+      nav#sidebar a.active { border-left-color:transparent; border-bottom:3px solid var(--acc); }
+      #side-status { display:none; }
+      main { overflow:visible; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>tg115bot</h1>
-    <nav>
-      <a href="/" class="{% if active=='dashboard' %}active{% endif %}">仪表盘</a>
-      <a href="/files" class="{% if active=='files' %}active{% endif %}">文件</a>
-      <a href="/offline" class="{% if active=='offline' %}active{% endif %}">离线任务</a>
-      <a href="/tasks" class="{% if active=='tasks' %}active{% endif %}">任务历史</a>
-      <a href="/accounts" class="{% if active=='accounts' %}active{% endif %}">账号</a>
-      <a href="/channels" class="{% if active=='channels' %}active{% endif %}">频道规则</a>
-      <a href="/logs" class="{% if active=='logs' %}active{% endif %}">日志</a>
-      <a href="/config" class="{% if active=='config' %}active{% endif %}">配置</a>
-    </nav>
-    <span class="hint" style="margin-left:auto">队列待处理: <b>{{ qsize }}</b></span>
+    <h1>📦 tg115bot</h1>
+    <span class="hint">管理台 · 与 tb / TUI 同源能力</span>
   </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  <div class="wrap">
+    <nav id="sidebar">
+      {% set nav_items = [
+        ('dashboard', '/', '📊', '仪表盘'),
+        ('files', '/files', '📁', '文件'),
+        ('offline', '/offline', '⏬', '离线任务'),
+        ('tasks', '/tasks', '🧾', '任务历史'),
+        ('accounts', '/accounts', '👤', '账号'),
+        ('channels', '/channels', '📺', '频道规则'),
+        ('logs', '/logs', '📜', '日志'),
+        ('config', '/config', '🔧', '配置'),
+      ] %}
+      {% for key, href, icon, label in nav_items %}
+      <a href="{{ href }}" class="{% if active==key %}active{% endif %}"><span>{{ icon }}</span><span>{{ label }}</span></a>
+      {% endfor %}
+      <div id="side-status">
+        <div>👤 {{ account_name }}</div>
+        <div class="ok">⏩ 服务运行中</div>
+        <div>🧾 队列待处理 <b>{{ qsize }}</b></div>
+      </div>
+    </nav>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <footer>
+    <span>tg115bot 管理台</span>
+    <span class="mono" id="clock"></span>
+  </footer>
+  <script>
+    function _tick() {
+      var el = document.getElementById('clock');
+      if (el) el.textContent = new Date().toTimeString().slice(0, 8);
+    }
+    setInterval(_tick, 1000);
+    _tick();
+  </script>
 </body>
 </html>

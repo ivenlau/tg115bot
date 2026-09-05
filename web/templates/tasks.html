@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}任务历史{% endblock %}
 {% block content %}
-<h3>任务历史（最近 100 条）</h3>
+<h3 class="page-title">🧾 任务历史</h3>
+<p class="hint" style="margin-top:-8px;margin-bottom:12px">最近 100 条</p>
 <div id="task-list">
   {% include "_tasks_list.html" %}
 </div>

@@ -21,7 +21,7 @@
       {% if e.icon == '📂' %}
       <span class="hint">目录不支持</span>
       {% elif e.pc %}
-      <button data-op="download" data-pc="{{ e.pc }}" data-name="{{ e.name }}">下载</button>
+      <button class="teal" data-op="download" data-pc="{{ e.pc }}" data-name="{{ e.name }}">下载</button>
       {% else %}
       <span class="hint">缺 pick_code</span>
       {% endif %}
@@ -42,7 +42,7 @@
 </div>
 
 <div class="row" style="margin-bottom:10px">
-  <button data-op="mkdir" data-path="{{ path }}">新建目录</button>
+  <button class="success" data-op="mkdir" data-path="{{ path }}">新建目录</button>
   <button class="ghost" hx-get="/partials/files?path={{ path|urlencode }}"
           hx-target="#files-main" hx-swap="innerHTML">刷新</button>
   <form class="inline" hx-post="/files/search" hx-target="#files-main" hx-swap="innerHTML"
@@ -77,9 +77,9 @@
         <input type="hidden" name="name" value="{{ e.name }}">
         <button class="danger">删除</button>
       </form>
-      <button data-op="download" data-path="{{ path }}" data-name="{{ e.name }}">下载</button>
-      <button class="ghost" data-op="rename" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ e.name }}">重命名</button>
-      <button class="ghost" data-op="move" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ path }}">移动</button>
+      <button class="teal" data-op="download" data-path="{{ path }}" data-name="{{ e.name }}">下载</button>
+      <button class="warn" data-op="rename" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ e.name }}">重命名</button>
+      <button class="purple" data-op="move" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ path }}">移动</button>
     </td>
   </tr>
   {% else %}

@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}频道规则{% endblock %}
 {% block content %}
-<h3>新增/更新规则</h3>
+<h3 class="page-title">📺 频道规则</h3>
+<h3 style="margin-top:0">新增/更新规则</h3>
 <form class="card" hx-post="/channels" hx-target="#rules-list" hx-swap="innerHTML" style="margin-bottom:18px">
   <div class="row">
     <label>频道ID <input name="channel_id" required placeholder="-1001234567890"></label>

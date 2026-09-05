@@ -1,24 +1,25 @@
-{# 仪表盘局部刷新片段（HTMX 每 3s 拉取） #}
+{# 仪表盘局部刷新片段（HTMX 每 3s 拉取）；卡片类型色边框对齐 TUI（磁盘黄/115青/API品红） #}
 <div class="grid">
   <div class="card"><h3>进行中任务</h3><div class="big">{{ active_tasks|length }}</div></div>
   <div class="card"><h3>历史总数</h3><div class="big">{{ stats.total }}</div>
     <span class="hint">✅{{ stats.done }} ❌{{ stats.failed }} 🚫{{ stats.cancelled }}</span></div>
-  <div class="card"><h3>秒传命中</h3><div class="big ok">{{ stats['秒传'] }}</div></div>
+  <div class="card acc-ok"><h3>秒传命中</h3><div class="big ok">{{ stats['秒传'] }}</div></div>
   <div class="card"><h3>可用账号</h3>
     <div class="big">{{ accounts|selectattr('status','equalto','ok')|list|length }}/{{ accounts|length }}</div>
   </div>
-  <div class="card"><h3>磁盘剩余</h3><div class="big">{{ '%.1f'|format(free_gb) }} GB</div>
+  <div class="card acc-disk"><h3>磁盘剩余</h3><div class="big">{{ '%.1f'|format(free_gb) }} GB</div>
     <span class="hint">下限 {{ min_free_gb }} GB</span></div>
-  <div class="card"><h3>115 空间</h3>
+  <div class="card acc-cloud"><h3>115 空间</h3>
     {% if space and space.total %}
+    {% set pct = space.used * 100 / space.total %}
     <div class="big">{{ space.used|human_bytes }}</div>
-    <span class="hint">/ {{ space.total|human_bytes }}（{{ '%.1f'|format(space.used * 100 / space.total) }}%）</span>
-    <div class="bar"><div style="width:{{ '%.1f'|format(space.used * 100 / space.total) }}%"></div></div>
+    <span class="hint">/ {{ space.total|human_bytes }}（{{ '%.1f'|format(pct) }}%）</span>
+    <div class="bar"><div style="width:{{ '%.1f'|format(pct) }}%;background:var(--cyan)"></div></div>
     {% else %}
     <div class="big muted">—</div><span class="hint">115 未就绪</span>
     {% endif %}
   </div>
-  <div class="card"><h3>115 API 余量</h3>
+  <div class="card acc-api"><h3>115 API 余量</h3>
     {% if api %}
     <div class="big">{{ api.limit - api.used }}</div>
     <span class="hint">今日已用 {{ api.used }} / {{ api.limit }}

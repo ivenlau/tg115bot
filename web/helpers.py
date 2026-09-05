@@ -26,10 +26,16 @@ templates.env.filters["status_badge"] = lambda s: {
 
 
 def page_ctx(request: Request, **kw) -> dict:
-    """整页公共模板上下文（队列深度等；partial 不经过它）。"""
-    base = {"request": request, "active": "", "qsize": 0}
+    """整页公共模板上下文（侧栏状态卡用的账号名/队列深度；partial 不经过它）。"""
+    base = {"request": request, "active": "", "qsize": 0, "account_name": "-"}
     tg = request.app.state.tg
     base["qsize"] = tg.queue.qsize() if tg.queue else 0
+    try:
+        accounts = getattr(tg.config, "accounts", None) if tg.config else None
+        if accounts:
+            base["account_name"] = accounts[0].name
+    except Exception:  # noqa: BLE001 -- 侧栏小卡信息缺失不值得炸页面
+        pass
     base.update(kw)
     return base
 

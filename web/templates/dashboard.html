@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}仪表盘{% endblock %}
 {% block content %}
+<h3 class="page-title">📊 仪表盘</h3>
 <div hx-get="/partials/dashboard" hx-trigger="every 3s" hx-swap="innerHTML">
   {% include "_dashboard.html" %}
 </div>

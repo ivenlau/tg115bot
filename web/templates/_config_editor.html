@@ -6,7 +6,7 @@
 {% if not read_err %}
 <div class="row" style="margin-bottom:10px">
   {% for t in toggles %}
-  <button class="{{ 'ghost' if not t.on else '' }}"
+  <button class="{{ 'ghost' if not t.on else 'success' }}"
           hx-post="/config/toggle" hx-vals='{"key":"{{ t.key }}"}'
           hx-target="#cfg-editor" hx-swap="innerHTML"
           hx-confirm="把 {{ t.label }} 切为{{ '关' if t.on else '开' }}？写入 config.yaml，重启服务后生效。">
@@ -23,7 +23,7 @@
     <button type="submit">保存（校验 + 自动备份）</button>
     <button type="button" class="ghost" hx-get="/partials/config-editor"
             hx-target="#cfg-editor" hx-swap="innerHTML">重新加载</button>
-    <button type="button" class="danger" hx-post="/config/restart" hx-target="#restart-status"
+    <button type="button" class="warn" hx-post="/config/restart" hx-target="#restart-status"
             hx-swap="innerHTML"
             hx-confirm="确认重启服务？Web 台将随服务一起重启，约 15 秒后自动恢复。">重启服务</button>
   </div>
