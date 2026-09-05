@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}文件{% endblock %}
+{% block content %}
+<h3>文件（115 网盘）</h3>
+<div id="files-main">
+  {% include "_files_list.html" %}
+</div>
+<div id="jobs-area" hx-get="/partials/jobs" hx-trigger="every 2s" hx-swap="innerHTML">
+  {% include "_jobs.html" %}
+</div>
+
+<dialog id="op-dlg">
+  <form id="op-form" hx-post="/files/rename" hx-target="#files-main" hx-swap="innerHTML"
+        hx-on::after-request="if(event.detail.successful) document.getElementById('op-dlg').close()">
+    <h3 id="op-title">操作</h3>
+    <p id="op-hint" class="hint" style="margin:0 0 8px"></p>
+    <input type="hidden" name="path">
+    <input type="hidden" name="name">
+    <input type="hidden" name="pc">
+    <div id="op-field-row">
+      <label><span id="op-field-label">名称</span><br>
+        <input name="value" id="op-value" style="width:100%;margin-top:4px">
+      </label>
+    </div>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button type="button" class="ghost" onclick="document.getElementById('op-dlg').close()">取消</button>
+      <button type="submit">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+// 弹窗操作分派：data-op 按钮统一走这个表单（改名/移动/新建/下载共用）
+var OP_CFG = {
+  rename:   {action: '/files/rename',   target: '#files-main', title: '重命名',           label: '新名称（不含 /）'},
+  move:     {action: '/files/move',     target: '#files-main', title: '移动',             label: '目标 115 目录（不存在自动创建）'},
+  mkdir:    {action: '/files/mkdir',    target: '#files-main', title: '新建目录',         label: '目录名（不含 /，逐级进入再建）'},
+  download: {action: '/files/download', target: '#jobs-area',  title: '下载（服务器端）', label: '保存到服务器的本地目录'}
+};
+document.addEventListener('click', function (ev) {
+  var b = ev.target.closest('[data-op]');
+  if (!b) return;
+  ev.preventDefault();
+  var cfg = OP_CFG[b.dataset.op];
+  if (!cfg) return;
+  var dlg = document.getElementById('op-dlg');
+  var f = document.getElementById('op-form');
+  f.setAttribute('hx-post', cfg.action);
+  f.setAttribute('hx-target', cfg.target);
+  htmx.process(f);
+  document.getElementById('op-title').textContent = cfg.title;
+  document.getElementById('op-hint').textContent = b.dataset.name ? ('条目：' + b.dataset.name) : '';
+  f.elements.path.value = b.dataset.path || '';
+  f.elements.name.value = (b.dataset.op === 'mkdir') ? '' : (b.dataset.name || '');
+  f.elements.pc.value = b.dataset.pc || '';
+  var v = document.getElementById('op-value');
+  v.value = b.dataset.value || (b.dataset.op === 'download' ? '~/Downloads' : '');
+  dlg.showModal();
+  v.focus();
+  v.select();
+});
+</script>
+{% endblock %}

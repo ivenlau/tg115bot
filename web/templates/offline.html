@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}离线任务{% endblock %}
+{% block content %}
+<h3>115 离线任务</h3>
+<form class="card" hx-post="/offline/add" hx-target="#off-list" hx-swap="innerHTML"
+      style="margin-bottom:16px">
+  <div class="row">
+    <input name="url" required style="flex:1;min-width:280px"
+           placeholder="粘贴 magnet / ed2k / HTTP 直链后提交">
+    <button type="submit">添加</button>
+  </div>
+  <p class="hint" style="margin:6px 0 0">保存到 upload.target_dir；列表每 30s 自动刷新。</p>
+</form>
+<div id="off-list" hx-get="/partials/offline" hx-trigger="every 30s" hx-swap="innerHTML">
+  {% include "_offline_list.html" %}
+</div>
+{% endblock %}

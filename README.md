@@ -30,7 +30,7 @@
 - **AI 助手** — 任意 OpenAI 兼容模型，一句中文操作全部功能；可按需生成受限沙箱工具（TG 确认后启用）
 - **文件整理** — 重命名模板（`{date}_{filename}` 等）+ 按扩展名自动归类子目录
 - **一键安装** — Linux / macOS `curl | bash`、Windows `irm | iex`；`tb init` 引导配置与 115 扫码，`tb doctor` 一键体检
-- **三套管理入口** — `tb` 命令行（与 `scripts/manual.py` 同构）、交互 TUI、Web 管理台（实时进度 / 任务 / 账号 / 规则 / 日志）
+- **三套管理入口** — `tb` 命令行（与 `scripts/manual.py` 同构）、交互 TUI、Web 管理台（文件管理 / 离线任务 / 实时进度 / 任务 / 账号 / 规则 / 日志 / 配置 / 扫码授权）
 - **多账号** — 加权轮转 + 故障冷却，分摊 115 风控压力
 - **零三方 SDK** — 115 开放平台协议与 OSS 签名直传均为手写实现，token 自动刷新
 - **数据可靠** — SQLite 持久化（任务 / 规则 / 账号 / 日志重启不丢），双日志 10M 滚动 × 7 天保留
@@ -233,7 +233,9 @@ AI 可调用全部内置工具（19 个，含「搜索 → 按 pick_code 直下�
 
 ### Web 管理台（可选）
 
-`web.enable: true` 后浏览器打开 `http://<host>:<port>/`（HTTP Basic 认证，凭据见 `config.web`）：仪表盘实时进度（3s 刷新）、`/tasks` 任务历史、`/accounts` 账号状态、`/channels` 规则在线增删、`/logs` 日志。
+`web.enable: true` 后浏览器打开 `http://<host>:<port>/`（HTTP Basic 认证，凭据见 `config.web`）：
+仪表盘（实时进度 + 115 空间 / API 余量 + 服务诊断）、`/files` 115 文件管理（浏览 / 全盘搜索 / 删除 / 重命名 / 移动 / 新建目录 / 服务器端下载 / 路径上传，传输进度实时可见）、
+`/offline` 离线任务（磁链 / ed2k / 直链添加，30s 自动刷新）、`/tasks` 任务历史（终态可删记录）、`/accounts` 账号状态、`/channels` 规则在线增删、`/logs` 日志（业务日志 + stdout 运行日志）、`/config` 参数编辑（校验 + 自动备份 + 快捷开关）与 115 扫码授权（真二维码）。
 
 ## 配置项
 

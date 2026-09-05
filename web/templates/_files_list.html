@@ -1,0 +1,100 @@
+{# 文件列表片段：浏览模式（path）/ 搜索模式（kw）。所有操作后 HTMX 整片替换 #files-main #}
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+
+{% if search %}
+<div class="row" style="margin-bottom:10px">
+  <b>🔍 搜索“{{ kw }}”</b>
+  <span class="hint">{{ entries|length }} 项{% if count > entries|length %}（共 {{ count }}，仅显示前 {{ entries|length }}）{% endif %} · 目录下载 v1 不支持</span>
+  <button class="ghost" style="margin-left:auto" hx-get="/partials/files?path={{ root|urlencode }}"
+          hx-target="#files-main" hx-swap="innerHTML">返回浏览</button>
+</div>
+<table>
+  <tr><th>类型</th><th>名称</th><th>大小</th><th>sha1</th><th>操作</th></tr>
+  {% for e in entries %}
+  <tr>
+    <td>{{ e.icon }}</td>
+    <td class="mono">{{ e.name }}</td>
+    <td class="mono">{{ e.size }}</td>
+    <td class="mono muted">{{ e.sha1 }}</td>
+    <td>
+      {% if e.icon == '📂' %}
+      <span class="hint">目录不支持</span>
+      {% elif e.pc %}
+      <button data-op="download" data-pc="{{ e.pc }}" data-name="{{ e.name }}">下载</button>
+      {% else %}
+      <span class="hint">缺 pick_code</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="hint">无匹配结果。</td></tr>
+  {% endfor %}
+</table>
+
+{% else %}
+<div class="row" style="margin-bottom:10px">
+  <span class="mono">
+    {% for c in crumbs %}{% if not loop.first %} / {% endif %}<a href="#"
+       hx-get="/partials/files?path={{ c.path|urlencode }}" hx-target="#files-main" hx-swap="innerHTML">{{ c.name }}</a>{% endfor %}
+  </span>
+  <span class="hint" style="margin-left:auto">{{ entries|length }} 项{% if count > entries|length %}（共 {{ count }}，仅显示前 {{ entries|length }}）{% endif %}</span>
+</div>
+
+<div class="row" style="margin-bottom:10px">
+  <button data-op="mkdir" data-path="{{ path }}">新建目录</button>
+  <button class="ghost" hx-get="/partials/files?path={{ path|urlencode }}"
+          hx-target="#files-main" hx-swap="innerHTML">刷新</button>
+  <form class="inline" hx-post="/files/search" hx-target="#files-main" hx-swap="innerHTML"
+        style="margin-left:auto;display:flex;gap:8px">
+    <input name="kw" placeholder="全盘搜索文件名…" required style="width:220px">
+    <button type="submit">搜索</button>
+  </form>
+</div>
+
+<table>
+  <tr><th>类型</th><th>名称</th><th>大小</th><th>操作</th></tr>
+  <tr>
+    <td>📂</td>
+    <td class="mono"><a href="#" hx-get="/partials/files?path={{ parent|urlencode }}"
+       hx-target="#files-main" hx-swap="innerHTML">..</a></td>
+    <td></td><td></td>
+  </tr>
+  {% for e in entries %}
+  <tr>
+    <td>{{ e.icon }}</td>
+    <td class="mono">
+      {% if e.icon == '📂' %}
+      <a href="#" hx-get="/partials/files?path={{ e.full|urlencode }}"
+         hx-target="#files-main" hx-swap="innerHTML">{{ e.name }}</a>
+      {% else %}{{ e.name }}{% endif %}
+    </td>
+    <td class="mono">{{ e.size }}</td>
+    <td>
+      <form class="inline" hx-post="/files/delete" hx-target="#files-main" hx-swap="innerHTML"
+            hx-confirm="删除「{{ e.name }}」？将移入 115 回收站，可在网盘恢复。">
+        <input type="hidden" name="path" value="{{ path }}">
+        <input type="hidden" name="name" value="{{ e.name }}">
+        <button class="danger">删除</button>
+      </form>
+      <button data-op="download" data-path="{{ path }}" data-name="{{ e.name }}">下载</button>
+      <button class="ghost" data-op="rename" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ e.name }}">重命名</button>
+      <button class="ghost" data-op="move" data-path="{{ path }}" data-name="{{ e.name }}" data-value="{{ path }}">移动</button>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4" class="hint">空目录。</td></tr>
+  {% endfor %}
+</table>
+
+<form class="card" hx-post="/files/upload" hx-target="#jobs-area" hx-swap="innerHTML" style="margin-top:14px">
+  <div class="row">
+    <b>⬆ 上传</b>
+    <input type="hidden" name="path" value="{{ path }}">
+    <input name="src" required style="flex:1;min-width:260px"
+           placeholder="服务器本地文件/目录/通配符，如 /data/photos 或 D:\p*.jpg → 上传到当前目录（{{ path }}）">
+    <button type="submit">上传</button>
+  </div>
+  <p class="hint" style="margin:6px 0 0">上传在服务器后台执行，进度见下方「传输任务」；秒传命中时瞬间完成。</p>
+</form>
+{% endif %}

@@ -1,0 +1,25 @@
+{# 离线任务列表片段（添加/删除后 HTMX 局部替换；整页每 30s 轮询） #}
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<table>
+  <tr><th>状态</th><th>名称</th><th>进度</th><th>info_hash</th><th>操作</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td class="{{ r.cls }}">{{ r.icon }} {{ r.label }}</td>
+    <td class="mono">{{ r.name }}</td>
+    <td class="mono">{{ r.pct }}</td>
+    <td class="mono muted">{{ r.info_hash[:12] }}</td>
+    <td>
+      {% if r.info_hash %}
+      <form class="inline" hx-post="/offline/delete" hx-target="#off-list" hx-swap="innerHTML"
+            hx-confirm="删除「{{ r.name }}」？将连同已下载的源文件一起删除。">
+        <input type="hidden" name="info_hash" value="{{ r.info_hash }}">
+        <button class="danger">删除</button>
+      </form>
+      {% else %}<span class="hint">-</span>{% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="hint">暂无离线任务——粘贴磁力 / ed2k / 直链后提交即可。</td></tr>
+  {% endfor %}
+</table>

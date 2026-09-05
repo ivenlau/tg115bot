@@ -1,0 +1,25 @@
+{# 传输任务片段（下载/上传进度；HTMX 每 2s 轮询替换） #}
+<h3 style="margin-top:20px">传输任务</h3>
+{% if jobs %}
+<table>
+  <tr><th>类型</th><th>名称</th><th>状态</th><th>进度</th><th>详情</th></tr>
+  {% for j in jobs %}
+  <tr>
+    <td>{{ '⬆ 上传' if j.kind == 'upload' else '⬇ 下载' }}</td>
+    <td class="mono">{{ j.name }}</td>
+    <td class="{{ 'ok' if j.status == 'done' else ('err' if j.status == 'failed' else '') }}">
+      {{ {'running': '进行中', 'done': '✅ 完成', 'failed': '❌ 失败'}.get(j.status, j.status) }}
+    </td>
+    <td class="mono">
+      {% if j.status == 'running' and j.total %}
+        {{ j.written|human_bytes }} / {{ j.total|human_bytes }}
+        <div class="bar"><div style="width:{{ '%.1f'|format(j.written * 100 / j.total) if j.total else 0 }}%"></div></div>
+      {% elif j.status == 'running' %}…{% else %}-{% endif %}
+    </td>
+    <td class="mono hint">{{ j.detail }}{% if j.error %} <span class="err">{{ j.error }}</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="hint">暂无传输任务。文件页发起「下载 / 上传」后在此显示实时进度。</p>
+{% endif %}

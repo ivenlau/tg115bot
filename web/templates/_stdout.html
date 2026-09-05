@@ -1,0 +1,6 @@
+{# 运行日志 stdout tail 片段（HTMX 每 3s 整片替换） #}
+{% if tail %}
+<pre class="log">{{ tail }}</pre>
+{% else %}
+<p class="hint">（暂无运行日志——stdout.log 不存在或为空）</p>
+{% endif %}

@@ -9,9 +9,33 @@
   </div>
   <div class="card"><h3>磁盘剩余</h3><div class="big">{{ '%.1f'|format(free_gb) }} GB</div>
     <span class="hint">下限 {{ min_free_gb }} GB</span></div>
+  <div class="card"><h3>115 空间</h3>
+    {% if space and space.total %}
+    <div class="big">{{ space.used|human_bytes }}</div>
+    <span class="hint">/ {{ space.total|human_bytes }}（{{ '%.1f'|format(space.used * 100 / space.total) }}%）</span>
+    <div class="bar"><div style="width:{{ '%.1f'|format(space.used * 100 / space.total) }}%"></div></div>
+    {% else %}
+    <div class="big muted">—</div><span class="hint">115 未就绪</span>
+    {% endif %}
+  </div>
+  <div class="card"><h3>115 API 余量</h3>
+    {% if api %}
+    <div class="big">{{ api.limit - api.used }}</div>
+    <span class="hint">今日已用 {{ api.used }} / {{ api.limit }}
+      {%- if quota %} · 离线配额 {{ quota.get('used', '?') }}/{{ quota.get('count', '?') }}{% endif %}</span>
+    {% else %}
+    <div class="big muted">—</div><span class="hint">115 未就绪</span>
+    {% endif %}
+  </div>
 </div>
 
-<h3>进行中</h3>
+<div class="row" style="margin-bottom:12px">
+  <h3 style="margin:0">进行中</h3>
+  <button class="ghost" hx-post="/partials/doctor" hx-target="#doctor-result" hx-swap="innerHTML"
+          style="margin-left:auto">服务诊断</button>
+</div>
+<div id="doctor-result" class="hint" style="margin-bottom:6px">点「服务诊断」跑一遍体检（环境 / 授权 / 磁盘 / mihomo / 服务）。</div>
+
 {% if active_tasks %}
 <table>
   <tr><th>文件</th><th>来源</th><th>阶段</th><th>进度</th><th>耗时</th></tr>

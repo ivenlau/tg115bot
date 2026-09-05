@@ -2,12 +2,25 @@
 {% block title %}日志{% endblock %}
 {% block content %}
 <div class="row" style="margin-bottom:12px">
-  <span>级别筛选：</span>
-  <a class="btn" href="/logs">全部</a>
-  <a class="btn" href="/logs?level=WARNING">WARNING+</a>
-  <a class="btn" href="/logs?level=ERROR">ERROR+</a>
-  <span class="hint" style="margin-left:auto">最近 300 条</span>
+  <span>视图：</span>
+  <a class="btn {{ 'ghost' if view!='db' else '' }}" href="/logs">业务日志</a>
+  <a class="btn {{ 'ghost' if view!='stdout' else '' }}" href="/logs?view=stdout">运行日志（stdout）</a>
+  {% if view == 'stdout' %}
+  <span class="hint" style="margin-left:auto">{{ log_path }} · 每 3s 刷新（最近 200 行）</span>
+  {% else %}
+  <span style="margin-left:auto">级别筛选：</span>
+  <a class="btn {{ 'ghost' if level else '' }}" href="/logs">全部</a>
+  <a class="btn {{ 'ghost' if level!='WARNING' else '' }}" href="/logs?level=WARNING">WARNING+</a>
+  <a class="btn {{ 'ghost' if level!='ERROR' else '' }}" href="/logs?level=ERROR">ERROR+</a>
+  <span class="hint">最近 300 条</span>
+  {% endif %}
 </div>
+
+{% if view == 'stdout' %}
+<div id="stdout-view" hx-get="/partials/stdout" hx-trigger="every 3s" hx-swap="innerHTML">
+  {% include "_stdout.html" %}
+</div>
+{% else %}
 <table>
   <tr><th>时间</th><th>级别</th><th>logger</th><th>消息</th></tr>
   {% for l in logs %}
@@ -21,4 +34,5 @@
   <tr><td colspan="4" class="hint">暂无日志。</td></tr>
   {% endfor %}
 </table>
+{% endif %}
 {% endblock %}

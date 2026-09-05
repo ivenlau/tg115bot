@@ -24,6 +24,7 @@ MODULES = [
     "tests.test_search_download",
     "tests.test_manual_tools",
     "tests.test_tb",
+    "tests.test_web",
     "tests.test_workspace_finalize",
     "tests.test_log_rotation",
     "tests.test_tui",

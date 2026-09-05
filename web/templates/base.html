@@ -9,7 +9,7 @@
     :root { --bg:#1e1e2e; --panel:#2a2a3c; --fg:#e4e4ef; --muted:#9a9ab0; --acc:#89b4fa; --ok:#a6e3a1; --warn:#f9e2af; --err:#f38ba8; }
     * { box-sizing: border-box; }
     body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 -apple-system,"Segoe UI",Roboto,"Noto Sans CJK SC",sans-serif; }
-    header { display:flex; gap:18px; align-items:center; padding:10px 18px; background:#181825; border-bottom:1px solid #313244; }
+    header { display:flex; gap:18px; align-items:center; padding:10px 18px; background:#181825; border-bottom:1px solid #313244; flex-wrap:wrap; }
     header h1 { font-size:16px; margin:0; font-weight:600; }
     nav a { color:var(--muted); text-decoration:none; padding:6px 10px; border-radius:6px; }
     nav a:hover { background:#313244; color:var(--fg); }
@@ -28,11 +28,16 @@
     .bar { height:6px; background:#313244; border-radius:3px; overflow:hidden; margin-top:4px; }
     .bar > div { height:100%; background:var(--acc); }
     form.inline { display:inline; }
-    input,select { background:#181825; color:var(--fg); border:1px solid #313244; border-radius:6px; padding:6px 8px; font:inherit; }
+    input,select,textarea { background:#181825; color:var(--fg); border:1px solid #313244; border-radius:6px; padding:6px 8px; font:inherit; }
     button,.btn { background:var(--acc); color:#1e1e2e; border:0; border-radius:6px; padding:6px 12px; font-weight:600; cursor:pointer; text-decoration:none; }
     button.danger { background:var(--err); color:#1e1e2e; }
+    button.ghost,.btn.ghost { background:#313244; color:var(--fg); font-weight:400; }
     .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .hint { color:var(--muted); font-size:12px; }
+    dialog { background:var(--panel); color:var(--fg); border:1px solid #313244; border-radius:10px; padding:18px; min-width:360px; max-width:92vw; }
+    dialog::backdrop { background:rgba(0,0,0,.55); }
+    dialog h3 { margin:0 0 6px; }
+    pre.log { background:#181825; border:1px solid #313244; border-radius:10px; padding:12px; overflow:auto; max-height:62vh; font-size:12px; line-height:1.45; white-space:pre-wrap; word-break:break-all; }
   </style>
 </head>
 <body>
@@ -40,10 +45,13 @@
     <h1>tg115bot</h1>
     <nav>
       <a href="/" class="{% if active=='dashboard' %}active{% endif %}">仪表盘</a>
+      <a href="/files" class="{% if active=='files' %}active{% endif %}">文件</a>
+      <a href="/offline" class="{% if active=='offline' %}active{% endif %}">离线任务</a>
       <a href="/tasks" class="{% if active=='tasks' %}active{% endif %}">任务历史</a>
       <a href="/accounts" class="{% if active=='accounts' %}active{% endif %}">账号</a>
       <a href="/channels" class="{% if active=='channels' %}active{% endif %}">频道规则</a>
       <a href="/logs" class="{% if active=='logs' %}active{% endif %}">日志</a>
+      <a href="/config" class="{% if active=='config' %}active{% endif %}">配置</a>
     </nav>
     <span class="hint" style="margin-left:auto">队列待处理: <b>{{ qsize }}</b></span>
   </header>

@@ -1,0 +1,28 @@
+{# 任务历史列表片段（删除后 HTMX 局部替换） #}
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<table>
+  <tr><th>状态</th><th>文件</th><th>大小</th><th>目标目录</th><th>方式</th><th>来源</th><th>创建时间</th><th>错误</th><th>操作</th></tr>
+  {% for t in tasks %}
+  <tr>
+    <td>{{ t.status|status_badge }} {{ t.status }}</td>
+    <td class="mono">{{ t.filename }}</td>
+    <td class="mono">{{ t.size|human_bytes }}</td>
+    <td class="mono">{{ t.target_dir }}</td>
+    <td>{{ t.method or '-' }}</td>
+    <td>{{ '频道' if t.source=='channel' else '手动' }}</td>
+    <td class="mono">{{ t.created_at|ts }}</td>
+    <td class="mono err" style="max-width:220px;overflow:hidden;text-overflow:ellipsis">{{ t.error or '' }}</td>
+    <td>
+      {% if t.status in ('done', 'failed', 'cancelled') %}
+      <form class="inline" hx-post="/tasks/{{ t.task_id }}/delete" hx-target="#task-list" hx-swap="innerHTML"
+            hx-confirm="删除「{{ t.filename }}」的记录？仅清掉这条记录，不影响 115 云端文件。">
+        <button class="danger">删记录</button>
+      </form>
+      {% else %}<span class="hint">-</span>{% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="9" class="hint">暂无任务——向 bot 发送文件即可开始。</td></tr>
+  {% endfor %}
+</table>

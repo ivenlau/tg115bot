@@ -1,0 +1,24 @@
+{# 115 扫码授权片段（生成后 HTMX 替换；轮询在 _auth_poll） #}
+{% if account_status %}
+<p class="hint" style="margin-top:0">账号：
+  {%- for a in account_status %} <span class="mono">{{ a.name }}</span>
+  <span class="{{ 'ok' if a.status=='ok' else 'err' }}">{{ a.status }}</span>{% if not loop.last %} ·{% endif %}{% endfor %}
+</p>
+{% endif %}
+{% if auth_msg %}<p class="err">{{ auth_msg }}</p>{% endif %}
+
+{% if qr_img %}
+<p>账号 <b class="mono">{{ qr_account }}</b> 的授权二维码（115 APP → 扫一扫）：</p>
+<img src="{{ qr_img }}" alt="115 授权二维码" width="240" height="240"
+     style="background:#fff;padding:10px;border-radius:10px">
+<div id="auth-poll" hx-get="/partials/auth-poll" hx-trigger="every 3s" hx-swap="outerHTML">
+  <span class="hint">等待扫码…（约 5 分钟有效，过期后重新生成）</span>
+</div>
+<button class="ghost" style="margin-top:10px" hx-post="/auth/qr/start"
+        hx-target="#auth-area" hx-swap="innerHTML">换一个二维码</button>
+{% else %}
+<button hx-post="/auth/qr/start" hx-target="#auth-area" hx-swap="innerHTML">
+  生成二维码（扫码授权 / 强刷 token）
+</button>
+<p class="hint" style="margin-top:8px">用 115 APP 扫码确认；token 失效、授权解除或换绑账号时使用。授权对象：config.accounts 第一个账号。</p>
+{% endif %}

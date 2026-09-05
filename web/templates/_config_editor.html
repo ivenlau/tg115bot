@@ -1,0 +1,33 @@
+{# 配置编辑器片段（保存/开关/重载后 HTMX 整片替换） #}
+{% if msg %}<p class="ok">{{ msg }}</p>{% endif %}
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+{% if read_err %}<p class="err">{{ read_err }}</p>{% endif %}
+
+{% if not read_err %}
+<div class="row" style="margin-bottom:10px">
+  {% for t in toggles %}
+  <button class="{{ 'ghost' if not t.on else '' }}"
+          hx-post="/config/toggle" hx-vals='{"key":"{{ t.key }}"}'
+          hx-target="#cfg-editor" hx-swap="innerHTML"
+          hx-confirm="把 {{ t.label }} 切为{{ '关' if t.on else '开' }}？写入 config.yaml，重启服务后生效。">
+    {{ t.label }}：{{ '✅ 开' if t.on else '⏸ 关' }}
+  </button>
+  {% endfor %}
+  <span class="hint" style="margin-left:auto">开关即改即存；全文编辑见下。</span>
+</div>
+
+<form hx-post="/config/save" hx-target="#cfg-editor" hx-swap="innerHTML">
+  <textarea name="text" class="mono" spellcheck="false"
+            style="width:100%;min-height:420px;line-height:1.5">{{ text }}</textarea>
+  <div class="row" style="margin-top:10px">
+    <button type="submit">保存（校验 + 自动备份）</button>
+    <button type="button" class="ghost" hx-get="/partials/config-editor"
+            hx-target="#cfg-editor" hx-swap="innerHTML">重新加载</button>
+    <button type="button" class="danger" hx-post="/config/restart" hx-target="#restart-status"
+            hx-swap="innerHTML"
+            hx-confirm="确认重启服务？Web 台将随服务一起重启，约 15 秒后自动恢复。">重启服务</button>
+  </div>
+  <p class="hint" style="margin-top:6px">保存为全文写回（自动备份 config.yaml.bak.&lt;时间戳&gt;）；大部分参数需重启服务生效。</p>
+</form>
+<div id="restart-status" style="margin-top:8px"></div>
+{% endif %}
